@@ -68,7 +68,7 @@ params:
 dependencies:
   commands:
     - puredns
-    - httpx
+    - pd-httpx
     - dnsx
     - jq
 
@@ -176,7 +176,7 @@ steps:
     log: "Probing HTTP endpoints"
     commands:
       - 'cat {{dnsFile}} | awk -F ". " "{print $1}" | sort -u > {{httpFile}}-tmp'
-      - 'cat {{httpFile}}-tmp {{finalSubdomainFile}} | sort -u | httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}'
+      - 'cat {{httpFile}}-tmp {{finalSubdomainFile}} | sort -u | pd-httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}'
       - "rm -rf {{httpFile}}-tmp"
     on_error:
       - action: continue
@@ -187,7 +187,7 @@ steps:
     pre_condition: 'file_length("{{httpFile}}") < 1'
     commands:
       - 'cat {{dnsFile}} | awk -F ". " "{print $1}" | sort -u > {{httpFile}}-tmp'
-      - 'cat {{httpFile}}-tmp {{finalSubdomainFile}} | sort -u | httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}'
+      - 'cat {{httpFile}}-tmp {{finalSubdomainFile}} | sort -u | pd-httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}'
       - "rm -rf {{httpFile}}-tmp"
     on_error:
       - action: continue
@@ -212,7 +212,7 @@ steps:
     functions:
       - 'log_warn("HTTP File {{httpFile}} is too big and excess the limit {{wildcardLimit}}. Filtering it...")'
       - 'exec_cmd("rm -rf {{httpFile}}")'
-      - 'exec_cmd("cat {{dnsFile}} | grep ''{{Target}}'' | awk ''{print $1}'' | sed ''s/\\.$//g'' | sort -u | httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}")'
+      - 'exec_cmd("cat {{dnsFile}} | grep ''{{Target}}'' | awk ''{print $1}'' | sed ''s/\\.$//g'' | sort -u | pd-httpx -H "{{defaultUA}}" -silent -t {{httpThreads}} >> {{httpFile}}")'
     on_error:
       - action: continue
 

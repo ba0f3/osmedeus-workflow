@@ -36,10 +36,10 @@ params:
   - name: httpTimeout
     default: "15"
   - name: defaultUA
-    default: "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
 
   # disable this by default as it alert a lot of Cloud Provider
-  - name: enableSYNScan 
+  - name: enableSYNScan
     type: bool
     default: false
   - name: rateRustScan
@@ -61,7 +61,7 @@ params:
 # -----------------------------------------------------------------------------
 dependencies:
   commands:
-    - httpx
+    - pd-httpx
 
   variables:
     - name: Target
@@ -131,7 +131,7 @@ steps:
     functions:
       - nmap_to_jsonl("{{nmapOutput}}.xml", "{{nmapJsonlOutput}}")
       - db_import_port_assets("{{TargetSpace}}", "{{nmapJsonlOutput}}")
-      # this is to join the host:ip and host:port for the http probing step, as httpx need host:port as input
+      # this is to join the host:ip and host:port for the http probing step, as pd-httpx need host:port as input
       - exec_cmd("cat {{nmapJsonlOutput}} | jq -r '.host_ip as $ip | .open_ports[] | \"\($ip):\(. | split("/")[0])\"' >> {{openPortsFile}}")
 
   - name: sort-open-ports-file
@@ -146,8 +146,8 @@ steps:
     type: bash
     log: "Probing for HTTP services on open ports from rustscan results"
     pre_condition: 'file_exists("{{openPortsFile}}")'
-    commands: 
-      - cat {{openPortsFile}} | httpx -H '{{defaultUA}}' -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpPortFingerprintJsonlFile}}
+    commands:
+      - cat {{openPortsFile}} | pd-httpx -H '{{defaultUA}}' -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpPortFingerprintJsonlFile}}
       - cat {{httpPortFingerprintJsonlFile}} | jq -r '[.host_ip,.port] | join(\":\")' | sort -u >> {{openPortsFile}}
     on_error:
       - action: continue # expected error if no port found
@@ -159,8 +159,8 @@ steps:
     type: bash
     log: "Probing for HTTP services on open ports"
     pre_condition: 'file_exists("{{ipFile}}") && !file_exists("{{openPortsFile}}")'
-    commands: 
-      - cat {{ipFile}} | httpx -H '{{defaultUA}}' -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain -ports 'http:{{commonHttpPorts}},https:{{commonHttpsPort}}' >> {{httpPortFingerprintJsonlFile}}
+    commands:
+      - cat {{ipFile}} | pd-httpx -H '{{defaultUA}}' -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain -ports 'http:{{commonHttpPorts}},https:{{commonHttpsPort}}' >> {{httpPortFingerprintJsonlFile}}
       - cat {{httpPortFingerprintJsonlFile}} | jq -r '[.host_ip,.port] | join(\":\")' | sort -u >> {{openPortsFile}}
     on_error:
       - action: continue # expected error if no port found
@@ -175,4 +175,3 @@ steps:
       - 'db_total_urls("{{httpPortFingerprintJsonlFile}}")'
       - 'db_total_assets("{{httpPortFingerprintJsonlFile}}")'
       - 'db_import_asset_from_file("{{TargetSpace}}", "{{httpPortFingerprintJsonlFile}}")'
-

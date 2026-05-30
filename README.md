@@ -52,7 +52,7 @@ The workflow follows a phased approach to reconnaissance:
          ▼
 ┌─────────────────┐
 │    Probing      │  Phase 2: DNS resolution and HTTP probing
-│  (DNS + HTTP)   │  (puredns, massdns, httpx, dnsx)
+│  (DNS + HTTP)   │  (puredns, massdns, pd-httpx, dnsx)
 └────────┬────────┘
          │
          ▼
@@ -105,8 +105,8 @@ The workflow follows a phased approach to reconnaissance:
 | `util-archive.yaml` | Archive/wayback machine data collection |
 | `enum-ipspace.yaml` | IP space enumeration |
 | `probe-port.yaml` | Port scanning |
-| `probe-port-fp.yaml` | Port scanning with fingerprinting |
 | `scan-vuln.yaml` | Vulnerability scanning |
+| `scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scanning |
 | `scan-content.yaml` | Directory and content bruteforcing |
 | `recon-spider.yaml` | Web spidering/crawling |
 
@@ -128,6 +128,7 @@ The workflow follows a phased approach to reconnaissance:
 | `do-probe-port.yaml` | Port scan fragment |
 | `do-scan-content.yaml` | Content discovery fragment |
 | `do-scan-vuln.yaml` | Vulnerability scan fragment |
+| `do-scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scan fragment |
 | `do-deep-vuln-scan.yaml` | Deep vulnerability scan fragment |
 | `do-scan-repo.yaml` | Repository scanning fragment |
 | `do-util-normalize.yaml` | Normalization utility fragment |

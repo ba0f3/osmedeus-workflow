@@ -16,17 +16,12 @@ modules:
   - name: do-recon-http-fp
     path: fragments/do-recon-http-fp.yaml
 
-  - name: do-recon-spider
-    path: fragments/do-recon-spider.yaml
-    depends_on:
-      - do-recon-http-fp
-
   - name: do-scan-vuln
     path: fragments/do-scan-vuln.yaml
     depends_on:
       - do-recon-http-fp
 
-  - name: do-scan-content
-    path: fragments/do-scan-content.yaml
+  - name: do-scan-vuln-thorough
+    path: fragments/do-scan-vuln-thorough.yaml
     depends_on:
       - do-recon-http-fp

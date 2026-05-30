@@ -31,6 +31,7 @@ params:
   - name: httpFingerprintJsonFile
     default: "{{Output}}/fingerprint/http-fingerprint-{{TargetSpace}}.jsonl"
 
+
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
 # -----------------------------------------------------------------------------
@@ -52,6 +53,7 @@ reports:
     default: "{{nonCdnIPFile}}"
     type: text
     description: List of discovered non-cdn IP addresses
+
 
 # -----------------------------------------------------------------------------
 # STEPS SECTION

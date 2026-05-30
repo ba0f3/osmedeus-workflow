@@ -42,7 +42,7 @@ params:
 # -----------------------------------------------------------------------------
 dependencies:
   # commands:
-  #   - httpx  # disable because httpx is also a common tool on a lot of machine
+  #   - pd-httpx  # disable because pd-httpx is also a common tool on a lot of machine
 
   variables:
     - name: Target
@@ -73,31 +73,31 @@ steps:
     function: 'create_folder("{{Output}}/fingerprint")'
 
   # ---------------------------------------------------------------------------
-  # HTTP fingerprinting with httpx
+  # HTTP fingerprinting with pd-httpx
   # ---------------------------------------------------------------------------
   - name: http-fingerprint-with-response
     type: bash
-    log: "Fingerprinting HTTP hosts with httpx and store response"
+    log: "Fingerprinting HTTP hosts with pd-httpx and store response"
     pre_condition: 'file_exists("{{httpFile}}") && {{enableStoreHTTPResponse}}'
     command: 'cat {{httpFile}} | pd-httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain -include-response >> {{httpFingerprintJsonFile}}'
-    on_error: 
+    on_error:
       - action: continue # in case of error, continue the workflow
 
   - name: http-fingerprint
     type: bash
-    log: "Fingerprinting HTTP hosts with httpx"
+    log: "Fingerprinting HTTP hosts with pd-httpx"
     pre_condition: 'file_exists("{{httpFile}}") && !{{enableStoreHTTPResponse}}'
     command: 'cat {{httpFile}} | pd-httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpFingerprintJsonFile}}'
-    on_error: 
+    on_error:
       - action: continue # in case of error, continue the workflow
 
   # fallback in case the machine doesn't have 'pd-httpx'
   - name: http-fingerprint-fallback
     type: bash
-    log: "Fingerprinting HTTP hosts with httpx"
+    log: "Fingerprinting HTTP hosts with pd-httpx"
     pre_condition: '!file_exists("{{httpFingerprintJsonFile}}")'
-    command: 'cat {{httpFile}} | httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpFingerprintJsonFile}}'
-    on_error: 
+    command: 'cat {{httpFile}} | pd-httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpFingerprintJsonFile}}'
+    on_error:
       - action: continue # in case of error, continue the workflow
 
   - name: create-unique-jsonl
@@ -131,5 +131,5 @@ steps:
       - 'db_total_assets("{{httpFingerprintJsonFile}}")'
       - 'db_import_asset_from_file("{{TargetSpace}}", "{{httpFingerprintJsonFile}}")'
       - 'send_telegram_file("{{httpInterestingMarkdownFile}}", "HTTP Fingerprint Results")'
-    on_error: 
+    on_error:
       - action: continue # in case of error, continue the workflow

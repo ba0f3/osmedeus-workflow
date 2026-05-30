@@ -72,7 +72,7 @@ params:
 
 steps:
   # ---------------------------------------------------------------------------
-  # HTTP fingerprinting with httpx
+  # HTTP fingerprinting with pd-httpx
   # ---------------------------------------------------------------------------
   - name: create-output-folder
     type: function
@@ -83,10 +83,10 @@ steps:
 
   - name: http-fingerprint
     type: bash
-    log: "Fingerprinting HTTP hosts with httpx"
+    log: "Fingerprinting HTTP hosts with pd-httpx"
     # pre_condition: 'file_exists("{{httpFile}}")'
     commands:
-      - 'echo {{Target}} | httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpFingerprintJsonFile}}'
+      - 'echo {{Target}} | pd-httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -hash sha256 -jarm -tech-detect -status-code -cdn -tls-grab -ztls -vhost -follow-host-redirects -include-chain >> {{httpFingerprintJsonFile}}'
 
   # ---------------------------------------------------------------------------
   # Nuclei vulnerability scan
@@ -95,4 +95,4 @@ steps:
     type: bash
     log: "Running Nuclei vulnerability scan"
     commands:
-      - "echo {{Target}} | nuclei -H '{{defaultUA}}' -silent -c {{nucleiThreads}} -jsonl -severity '{{nucleiSeverity}}' -t {{nucleiTemplateConfig}} -l {{httpFile}} -irr -o {{nucleiOutputJsonl}} {{extraNuclei}} > /dev/null 2>&1"
+      - "echo {{Target}} | nuclei -H '{{defaultUA}}' -silent -c {{nucleiThreads}} -jsonl -severity '{{nucleiSeverity}}' -t {{nucleiTemplateConfig}} -irr -o {{nucleiOutputJsonl}} {{extraNuclei}} > /dev/null 2>&1"

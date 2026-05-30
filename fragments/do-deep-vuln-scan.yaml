@@ -49,20 +49,18 @@ steps:
     functions:
       - 'create_folder("{{Output}}/vulnscan")'
 
-  # ---------------------------------------------------------------------------
-  # Web crawling with Katana
-  # ---------------------------------------------------------------------------
-  - name: vigenium-deep-vuln-scan
-    type: foreach
-    log: "Running vigenium deep vulnerability scan on discovered URLs"
-    pre_condition: 'file_exists("{{httpFile}}")'
-    input: "{{httpFile}}"
-    variable: line
-    threads: "{{vigeniumPrallel}}"
-    step:
-      name: vigenium-single-target
-      type: bash
-      command: 'vigenium scan -u [[line]] -o results.json'
+  # # ---------------------------------------------------------------------------
+  # - name: vigenium-deep-vuln-scan
+  #   type: foreach
+  #   log: "Running vigenium deep vulnerability scan on discovered URLs"
+  #   pre_condition: 'file_exists("{{httpFile}}")'
+  #   input: "{{httpFile}}"
+  #   variable: line
+  #   threads: "{{vigeniumPrallel}}"
+  #   step:
+  #     name: vigenium-single-target
+  #     type: bash
+  #     command: 'vigenium scan -u [[line]] -o results.json'
 
 
   # ---------------------------------------------------------------------------

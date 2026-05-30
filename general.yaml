@@ -24,6 +24,8 @@ help:
 params:
   - name: enableDnsBruteFocing
     default: true
+  - name: enableStoreHTTPResponse
+    default: false
 
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
@@ -70,7 +72,15 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 5: Archiving
+  # Phase 5: Spidering
+  # ===========================================================================
+  - name: recon-spider
+    path: common/recon-spider.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 6: Archiving
   # ===========================================================================
   - name: util-archive
     path: common/util-archive.yaml
@@ -78,7 +88,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 6: IP Space Enumeration
+  # Phase 7: IP Space Enumeration
   # ===========================================================================
   - name: enum-ipspace
     path: common/enum-ipspace.yaml
@@ -86,7 +96,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 7: Vulnerability Scanning
+  # Phase 8: Vulnerability Scanning
   # ===========================================================================
   - name: scan-vuln
     path: common/scan-vuln.yaml
@@ -94,7 +104,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 8: Port Scanning
+  # Phase 9: Port Scanning
   # ===========================================================================
   - name: probe-port
     path: common/probe-port.yaml
@@ -102,7 +112,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 9: Content Discovery
+  # Phase 10: Content Discovery
   # ===========================================================================
   - name: scan-content
     path: common/scan-content.yaml

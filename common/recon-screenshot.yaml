@@ -33,7 +33,7 @@ params:
 # -----------------------------------------------------------------------------
 dependencies:
   commands:
-    - httpx
+    - pd-httpx
 
   variables:
     - name: Target
@@ -68,14 +68,14 @@ steps:
       - 'create_folder("{{Output}}/screenshots/{{TargetSpace}}-screenshots")'
 
   # ---------------------------------------------------------------------------
-  # Take screenshots with httpx
+  # Take screenshots with pd-httpx
   # ---------------------------------------------------------------------------
   - name: capture-screenshots
     type: bash
-    log: "Capturing screenshots with httpx"
+    log: "Capturing screenshots with pd-httpx"
     pre_condition: 'file_exists("{{httpInterestingFile}}")'
-    command: 'cat {{httpInterestingFile}} | httpx -t {{screenshotThreads}} -no-color -silent -screenshot -screenshot-timeout {{screenTimeout}} -json -system-chrome -store-response-dir {{Output}}/screenshots/{{TargetSpace}}-screenshots/ >> {{screenshotHttpJsonlFile}}'
-    on_error: 
+    command: "cat {{httpInterestingFile}} | pd-httpx -t {{screenshotThreads}} -no-color -silent -screenshot -screenshot-timeout {{screenTimeout}} -json -system-chrome -store-response-dir {{Output}}/screenshots/{{TargetSpace}}-screenshots/ >> {{screenshotHttpJsonlFile}}"
+    on_error:
       - action: continue # expected error if there is no chrome installed
 
   - name: process-screenshots
