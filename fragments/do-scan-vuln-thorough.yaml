@@ -15,17 +15,17 @@ params:
 
   # Vigolium scan tuning
   - name: vigoliumTimeout
-    default: "15m"
-  - name: vigoliumScanningMaxDuration
     default: "1h"
+  - name: vigoliumScanningMaxDuration
+    default: "45m"
   - name: vigoliumParallel
     default: "1"
   - name: vigoliumConcurrency
     default: "{{ threads * 5 }}"
   - name: vigoliumMaxPerHost
-    default: "20"
+    default: "50"
   - name: vigoliumStrategy
-    default: "deep"
+    default: "balanced"
   - name: vigoliumSkipPhases
     default: "known-issue-scan"
   - name: extraVigoliumScan
@@ -120,7 +120,7 @@ steps:
     step:
       name: vigolium-single-target
       type: bash
-      command: "timeout -k 1m {{vigoliumTimeout}} vigolium scan --silent -H \"{{vigoliumDefaultUA}}\" --spider --discover --scanning-max-duration {{vigoliumScanningMaxDuration}} --omit-response --db {{vigoliumVulnDBFile}} --skip {{vigoliumSkipPhases}} --strategy {{vigoliumStrategy}} --concurrency {{vigoliumConcurrency}} --max-per-host {{vigoliumMaxPerHost}} -t '[[line]]' {{extraVigoliumScan}}"
+      command: "timeout -k 1m {{vigoliumTimeout}} vigolium scan --silent -H \"{{vigoliumDefaultUA}}\" --scanning-max-duration {{vigoliumScanningMaxDuration}} --omit-response --db {{vigoliumVulnDBFile}} --skip {{vigoliumSkipPhases}} --strategy {{vigoliumStrategy}} --concurrency {{vigoliumConcurrency}} --max-per-host {{vigoliumMaxPerHost}} -t '[[line]]' {{extraVigoliumScan}}"
       on_error:
         - action: continue # keep scanning remaining targets if one target fails
 

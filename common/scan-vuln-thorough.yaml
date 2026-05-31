@@ -19,17 +19,17 @@ params:
 
   # Vigolium scan tuning
   - name: vigoliumTimeout
-    default: "15m"
+    default: "1h"
   - name: vigoliumScanningMaxDuration
-    default: "10m"
+    default: "45m"
   - name: vigoliumParallel
     default: "1"
   - name: vigoliumConcurrency
     default: "{{ threads * 5 }}"
   - name: vigoliumMaxPerHost
-    default: "20"
+    default: "50"
   - name: vigoliumStrategy
-    default: "deep"
+    default: "balanced"
   - name: vigoliumSkipPhases
     default: "known-issue-scan"
   - name: extraVigoliumScan

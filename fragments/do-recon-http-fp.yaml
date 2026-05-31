@@ -71,8 +71,8 @@ steps:
     type: function
     log: "Generating input file"
     functions:
-      - exec_cmd("echo {{Target}} | pd-httpx -silent -H '{{defaultUA}}' -t {{httpThreads}} -nf -timeout {{httpTimeout}} >> {{httpFile}}")
-      - exec_cmd("cat {{Target}} | pd-httpx -silent -H '{{defaultUA}}' -t {{httpThreads}} -nf -timeout {{httpTimeout}} >> {{httpFile}}")
+      - exec_cmd("echo {{Target}} | pd-httpx -silent -H '{{defaultUA}}' -t {{httpThreads}} -timeout {{httpTimeout}} >> {{httpFile}}")
+      - exec_cmd("cat {{Target}} | pd-httpx -silent -H '{{defaultUA}}' -t {{httpThreads}} -timeout {{httpTimeout}} >> {{httpFile}}")
       - sort_unix("{{httpFile}}")
 
   # ---------------------------------------------------------------------------
