@@ -1,0 +1,210 @@
+# =============================================================================
+# Module Workflow: Active Directory Enumeration
+# =============================================================================
+
+kind: module
+name: ad-enum
+description: Enumerate AD domain info, users, groups, computers, and password policy
+tags: ad, windows, active-directory, enumeration, ldap, smb
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+
+  - name: domainName
+    default: ""
+
+  - name: smbUser
+    default: ""
+  - name: smbPass
+    default: ""
+
+  - name: enumThreads
+    default: "{{threads}}"
+
+  - name: nxcOutput
+    default: "{{Output}}/ad/enum/nxc-domain-info-{{TargetSpace}}.txt"
+  - name: enum4linuxOutput
+    default: "{{Output}}/ad/enum/enum4linux-{{TargetSpace}}.txt"
+  - name: userList
+    default: "{{Output}}/ad/enum/ad-users-{{TargetSpace}}.txt"
+  - name: groupList
+    default: "{{Output}}/ad/enum/ad-groups-{{TargetSpace}}.txt"
+  - name: computerList
+    default: "{{Output}}/ad/enum/ad-computers-{{TargetSpace}}.txt"
+  - name: passwordPolicy
+    default: "{{Output}}/ad/enum/ad-password-policy-{{TargetSpace}}.txt"
+  - name: smbSigningStatus
+    default: "{{Output}}/ad/enum/smb-signing-{{TargetSpace}}.txt"
+  - name: domainSummary
+    default: "{{Output}}/ad/enum/domain-summary-{{TargetSpace}}.json"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - enum4linux-ng
+    - ldapsearch
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: ad-users
+    path: "{{userList}}"
+    type: text
+    description: Enumerated AD user accounts
+
+  - name: ad-groups
+    path: "{{groupList}}"
+    type: text
+    description: Enumerated AD groups
+
+  - name: ad-computers
+    path: "{{computerList}}"
+    type: text
+    description: Enumerated AD computer accounts
+
+  - name: ad-password-policy
+    path: "{{passwordPolicy}}"
+    type: text
+    description: AD password policy
+
+  - name: smb-signing-status
+    path: "{{smbSigningStatus}}"
+    type: text
+    description: SMB signing status per host
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup: Create output folders
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating AD enum output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/enum")'
+
+  # ---------------------------------------------------------------------------
+  # Domain discovery with netexec
+  # ---------------------------------------------------------------------------
+  - name: netexec-domain-discovery
+    type: bash
+    log: "Discovering AD domain info via netexec"
+    commands:
+      - 'netexec smb {{targetIp}} --gen-relay-list {{smbSigningStatus}} 2>/dev/null | tee {{nxcOutput}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # SMB signing check
+  # ---------------------------------------------------------------------------
+  - name: smb-signing-check
+    type: bash
+    log: "Checking SMB signing requirements"
+    pre_condition: 'file_exists("{{nxcOutput}}")'
+    commands:
+      - 'grep -i "signing" {{nxcOutput}} > {{smbSigningStatus}} 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Enum4linux-ng full enumeration
+  # ---------------------------------------------------------------------------
+  - name: enum4linux-ng-scan
+    type: bash
+    log: "Running enum4linux-ng for full AD enumeration"
+    commands:
+      - 'enum4linux-ng {{targetIp}} -A -o {{Output}}/ad/enum/ > {{enum4linuxOutput}} 2>/dev/null; e=$?; [ $e -eq 2 ] && exit 0; exit $e'
+    on_error:
+      - action: continue
+
+  - name: enum4linux-ng-auth-scan
+    type: bash
+    log: "Running enum4linux-ng with credentials"
+    pre_condition: '!is_empty("{{smbUser}}")'
+    commands:
+      - 'enum4linux-ng {{targetIp}} -A -o {{Output}}/ad/enum/ -u "{{smbUser}}" -p "{{smbPass}}" > {{Output}}/ad/enum/enum4linux-auth-{{TargetSpace}}.txt 2>/dev/null; e=$?; [ $e -eq 2 ] && exit 0; exit $e'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Extract users from enum4linux output
+  # ---------------------------------------------------------------------------
+  - name: extract-users
+    type: function
+    log: "Extracting user accounts"
+    pre_condition: 'file_exists("{{enum4linuxOutput}}")'
+    functions:
+      - 'exec_cmd("grep -i \"user:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{userList}}")'
+      - 'exec_cmd("grep -i \"group:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{groupList}}")'
+      - 'exec_cmd("grep -i \"computer:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{computerList}}")'
+      - 'exec_cmd("grep -i \"password policy\\|min_pwd\\|max_pwd\\|lockout\" {{enum4linuxOutput}} > {{passwordPolicy}}")'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Netexec user enumeration (if credentials provided)
+  # ---------------------------------------------------------------------------
+  - name: netexec-user-enum
+    type: bash
+    log: "Enumerating domain users via netexec"
+    pre_condition: '!is_empty("{{smbUser}}")'
+    commands:
+      - 'netexec smb {{targetIp}} -u {{smbUser}} -p {{smbPass}} --users > {{Output}}/ad/enum/nxc-users-{{TargetSpace}}.txt 2>/dev/null'
+    on_error:
+      - action: continue
+
+  - name: netexec-group-enum
+    type: bash
+    log: "Enumerating domain groups via netexec"
+    pre_condition: '!is_empty("{{smbUser}}")'
+    commands:
+      - 'netexec smb {{targetIp}} -u {{smbUser}} -p {{smbPass}} --groups > {{Output}}/ad/enum/nxc-groups-{{TargetSpace}}.txt 2>/dev/null'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # LDAP anonymous query for domain info
+  # ---------------------------------------------------------------------------
+  - name: ldap-anonymous-check
+    type: bash
+    log: "Checking LDAP anonymous bind"
+    commands:
+      - 'ldapsearch -x -H ldap://{{targetIp}} -b "" -s base namingContexts > {{Output}}/ad/enum/ldap-base-{{TargetSpace}}.txt 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  - name: ldap-domain-dump
+    type: bash
+    log: "Dumping AD info via LDAP (anonymous)"
+    pre_condition: 'file_exists("{{Output}}/ad/enum/ldap-base-{{TargetSpace}}.txt")'
+    commands:
+      - 'BASE_DN=$(grep -i "namingContexts" {{Output}}/ad/enum/ldap-base-{{TargetSpace}}.txt | head -1 | awk "{print \$2}"); [ -n "$BASE_DN" ] && ldapsearch -x -H ldap://{{targetIp}} -b "$BASE_DN" -E pr=1000/noprompt > {{Output}}/ad/enum/ldap-dump-{{TargetSpace}}.txt 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Summarize findings
+  # ---------------------------------------------------------------------------
+  - name: summarize-findings
+    type: function
+    log: "Summarizing AD enumeration findings"
+    functions:
+      - 'log_info("AD Enumeration complete for {{targetIp}}")'
+      - 'log_info("Users: " + file_length("{{userList}}"))'
+      - 'log_info("Groups: " + file_length("{{groupList}}"))'
+      - 'log_info("Computers: " + file_length("{{computerList}}"))'

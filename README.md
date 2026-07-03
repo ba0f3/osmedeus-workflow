@@ -93,6 +93,8 @@ The workflow follows a phased approach to reconnaissance:
 | `web-analysis.yaml` | Web application analysis workflow |
 | `repo.yaml` | Source repository scanning workflow |
 | `sast.yaml` | Static application security testing workflow |
+| `ad-standard.yaml` | Standard Active Directory assessment — domain discovery, LDAP/SMB enum, Kerberos attacks |
+| `ad-extensive.yaml` | Comprehensive AD assessment — all standard phases plus lateral movement checks |
 
 ### Module Workflows (common/)
 
@@ -109,6 +111,11 @@ The workflow follows a phased approach to reconnaissance:
 | `scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scanning |
 | `scan-content.yaml` | Directory and content bruteforcing |
 | `recon-spider.yaml` | Web spidering/crawling |
+| `ad-enum.yaml` | Active Directory discovery — domain info, users, groups, computers, password policy |
+| `ad-kerberos.yaml` | Kerberos attacks — AS-REP roasting, Kerberoasting, user enumeration |
+| `ad-ldap.yaml` | LDAP interrogation — anonymous bind, domain dump, signing checks |
+| `ad-smb.yaml` | SMB enumeration — share listing, null session, signing, anonymous access |
+| `ad-lateral.yaml` | Lateral movement checks — WinRM, WMI, PsExec access |
 
 ### Event Workflows (events/)
 
@@ -133,6 +140,11 @@ The workflow follows a phased approach to reconnaissance:
 | `do-scan-repo.yaml` | Repository scanning fragment |
 | `do-util-normalize.yaml` | Normalization utility fragment |
 | `do-util-prepare-repo.yaml` | Repository preparation utility fragment |
+| `do-ad-enum.yaml` | AD enumeration fragment |
+| `do-ad-kerberos.yaml` | Kerberos attacks fragment |
+| `do-ad-ldap.yaml` | LDAP interrogation fragment |
+| `do-ad-smb.yaml` | SMB enumeration fragment |
+| `do-ad-lateral.yaml` | Lateral movement checks fragment |
 
 ## Usage
 
@@ -148,6 +160,14 @@ osmedeus run -m subdomain-enum -t example.com
 
 # Dry-run to preview execution
 osmedeus run -f general -t example.com --dry-run
+
+# Run Active Directory assessment
+osmedeus run -f ad-standard -t 10.10.10.10
+osmedeus run -f ad-standard -t 192.168.1.0/24 -p 'domainName=corp.local'
+osmedeus run -f ad-extensive -t 10.10.10.10 -p 'domainName=corp.local' -p 'authUser=user' -p 'authPass=pass'
+
+# AD module specific
+osmedeus run -m ad-enum -t 10.10.10.10
 ```
 
 ## Building Your Own Workflow

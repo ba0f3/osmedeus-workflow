@@ -1,0 +1,127 @@
+kind: module
+name: do-ad-enum
+description: Active Directory enumeration on a single target
+tags: ad,enum,active-directory
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+  - name: domainName
+    default: ""
+  - name: smbUser
+    default: ""
+  - name: smbPass
+    default: ""
+
+  - name: nxcOutput
+    default: "{{Output}}/ad/enum/nxc-domain-info-{{TargetSpace}}.txt"
+  - name: enum4linuxOutput
+    default: "{{Output}}/ad/enum/enum4linux-{{TargetSpace}}.txt"
+  - name: userList
+    default: "{{Output}}/ad/enum/ad-users-{{TargetSpace}}.txt"
+  - name: groupList
+    default: "{{Output}}/ad/enum/ad-groups-{{TargetSpace}}.txt"
+  - name: computerList
+    default: "{{Output}}/ad/enum/ad-computers-{{TargetSpace}}.txt"
+  - name: passwordPolicy
+    default: "{{Output}}/ad/enum/ad-password-policy-{{TargetSpace}}.txt"
+  - name: smbSigningStatus
+    default: "{{Output}}/ad/enum/smb-signing-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - enum4linux-ng
+    - ldapsearch
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: ad-users
+    path: "{{userList}}"
+    type: text
+    description: Enumerated AD user accounts
+
+  - name: ad-groups
+    path: "{{groupList}}"
+    type: text
+    description: Enumerated AD groups
+
+  - name: ad-computers
+    path: "{{computerList}}"
+    type: text
+    description: Enumerated AD computer accounts
+
+  - name: ad-password-policy
+    path: "{{passwordPolicy}}"
+    type: text
+    description: AD password policy
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating AD enum output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/enum")'
+
+  # ---------------------------------------------------------------------------
+  # Domain discovery with netexec
+  # ---------------------------------------------------------------------------
+  - name: netexec-domain-discovery
+    type: bash
+    log: "Discovering AD domain info via netexec"
+    commands:
+      - 'netexec smb {{targetIp}} --gen-relay-list {{smbSigningStatus}} 2>/dev/null | tee {{nxcOutput}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Enum4linux-ng
+  # ---------------------------------------------------------------------------
+  - name: enum4linux-ng-scan
+    type: bash
+    log: "Running enum4linux-ng for full AD enumeration"
+    commands:
+      - 'enum4linux-ng {{targetIp}} -A -o {{Output}}/ad/enum/ > {{enum4linuxOutput}} 2>/dev/null; e=$?; [ $e -eq 2 ] && exit 0; exit $e'
+    on_error:
+      - action: continue
+
+  - name: enum4linux-ng-auth-scan
+    type: bash
+    log: "Running enum4linux-ng with credentials"
+    pre_condition: '!is_empty("{{smbUser}}")'
+    command: 'enum4linux-ng {{targetIp}} -A -o {{Output}}/ad/enum/ -u "{{smbUser}}" -p "{{smbPass}}" > {{Output}}/ad/enum/enum4linux-auth-{{TargetSpace}}.txt 2>/dev/null'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Extract objects
+  # ---------------------------------------------------------------------------
+  - name: extract-objects
+    type: function
+    log: "Extracting AD objects"
+    functions:
+      - 'exec_cmd("grep -i \"user:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{userList}}")'
+      - 'exec_cmd("grep -i \"group:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{groupList}}")'
+      - 'exec_cmd("grep -i \"computer:\" {{enum4linuxOutput}} | awk \"{print \$2}\" | sort -u > {{computerList}}")'
+      - 'exec_cmd("grep -i \"password\" {{enum4linuxOutput}} > {{passwordPolicy}}")'
+    on_error:
+      - action: continue

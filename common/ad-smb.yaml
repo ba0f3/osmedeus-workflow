@@ -1,0 +1,164 @@
+# =============================================================================
+# Module Workflow: SMB Enumeration
+# =============================================================================
+
+kind: module
+name: ad-smb
+description: SMB enumeration — share listing, null session, signing checks, anonymous access
+tags: ad, windows, smb, active-directory, file-sharing, enumeration
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+
+  - name: domainName
+    default: ""
+
+  - name: smbUser
+    default: ""
+  - name: smbPass
+    default: ""
+  - name: smbHash
+    default: ""
+
+  - name: smbTimeout
+    default: "60"
+
+  - name: smbSigningStatus
+    default: "{{Output}}/ad/smb/smb-signing-{{TargetSpace}}.txt"
+  - name: smbSharesList
+    default: "{{Output}}/ad/smb/smb-shares-{{TargetSpace}}.txt"
+  - name: smbSharesDetail
+    default: "{{Output}}/ad/smb/smb-shares-detail-{{TargetSpace}}.txt"
+  - name: smbNullSession
+    default: "{{Output}}/ad/smb/smb-null-session-{{TargetSpace}}.txt"
+  - name: smbAnonymousAccess
+    default: "{{Output}}/ad/smb/smb-anonymous-{{TargetSpace}}.txt"
+  - name: smbMapOutput
+    default: "{{Output}}/ad/smb/smbmap-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - smbmap
+    - smbclient
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: smb-shares
+    path: "{{smbSharesDetail}}"
+    type: text
+    description: Detailed SMB share listing
+
+  - name: smb-signing
+    path: "{{smbSigningStatus}}"
+    type: text
+    description: SMB signing requirements
+
+  - name: smb-null-session
+    path: "{{smbNullSession}}"
+    type: text
+    description: SMB null session access check
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup: Create output folders
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating SMB output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/smb")'
+
+  # ---------------------------------------------------------------------------
+  # SMB signing check with netexec
+  # ---------------------------------------------------------------------------
+  - name: smb-signing-check
+    type: bash
+    log: "Checking SMB signing requirements"
+    commands:
+      - 'netexec smb {{targetIp}} --gen-relay-list {{smbSigningStatus}} 2>/dev/null || echo "No hosts with SMB signing disabled" > {{smbSigningStatus}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Null session check with smbclient
+  # ---------------------------------------------------------------------------
+  - name: null-session-check
+    type: bash
+    log: "Testing SMB null session access"
+    commands:
+      - 'smbclient -L //{{targetIp}} -N -t 10 > {{smbNullSession}} 2>&1 || echo "Null session FAILED" > {{smbNullSession}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # SMB share enumeration with smbmap (anonymous)
+  # ---------------------------------------------------------------------------
+  - name: smbmap-anonymous-shares
+    type: bash
+    log: "Enumerating SMB shares (anonymous)"
+    commands:
+      - 'smbmap -H {{targetIp}} -u "" -p "" -d . -q > {{smbAnonymousAccess}} 2>/dev/null || echo "Anonymous access denied" > {{smbAnonymousAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # SMB share enumeration with netexec
+  # ---------------------------------------------------------------------------
+  - name: nxc-smb-shares
+    type: bash
+    log: "Enumerating SMB shares via netexec"
+    commands:
+      - 'netexec smb {{targetIp}} --shares > {{smbSharesDetail}} 2>/dev/null || echo "Share enumeration failed" > {{smbSharesDetail}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # SMB share enumeration with smbmap (authenticated)
+  # ---------------------------------------------------------------------------
+  - name: smbmap-auth-shares
+    type: bash
+    log: "Enumerating SMB shares with credentials"
+    pre_condition: '!is_empty("{{smbUser}}")'
+    commands:
+      - 'if [ -n "{{smbHash}}" ]; then smbmap -H {{targetIp}} -u "{{smbUser}}" --hash "{{smbHash}}" -d "{{domainName}}" -q > {{smbMapOutput}} 2>/dev/null; else smbmap -H {{targetIp}} -u "{{smbUser}}" -p "{{smbPass}}" -d "{{domainName}}" -q > {{smbMapOutput}} 2>/dev/null; fi || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Extract share list from outputs
+  # ---------------------------------------------------------------------------
+  - name: extract-share-list
+    type: function
+    log: "Extracting readable SMB share list"
+    functions:
+      - 'exec_cmd("cat {{smbSharesDetail}} {{smbMapOutput}} 2>/dev/null | grep -iE \"disk|read|write|admin|IPC\" | sort -u > {{smbSharesList}} || true")'
+      - 'log_info("Shares found: " + file_length("{{smbSharesList}}"))'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Summary
+  # ---------------------------------------------------------------------------
+  - name: summarize-smb
+    type: function
+    log: "Summarizing SMB enumeration"
+    functions:
+      - 'log_info("SMB enumeration complete for {{targetIp}}")'

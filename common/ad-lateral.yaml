@@ -1,0 +1,140 @@
+# =============================================================================
+# Module Workflow: Lateral Movement Checks
+# =============================================================================
+
+kind: module
+name: ad-lateral
+description: Lateral movement primitives — WinRM, WMI, and PsExec access checks
+tags: ad, windows, lateral-movement, winrm, wmi, psexec
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+
+  - name: domainName
+    default: ""
+
+  - name: authUser
+    default: ""
+  - name: authPass
+    default: ""
+  - name: authHash
+    default: ""
+
+  - name: lateralTimeout
+    default: "60"
+
+  - name: winrmAccess
+    default: "{{Output}}/ad/lateral/winrm-access-{{TargetSpace}}.txt"
+  - name: wmiAccess
+    default: "{{Output}}/ad/lateral/wmi-access-{{TargetSpace}}.txt"
+  - name: psexecAccess
+    default: "{{Output}}/ad/lateral/psexec-access-{{TargetSpace}}.txt"
+  - name: adminAccess
+    default: "{{Output}}/ad/lateral/admin-access-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - evil-winrm
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: winrm-access
+    path: "{{winrmAccess}}"
+    type: text
+    description: Hosts accessible via WinRM
+
+  - name: wmi-access
+    path: "{{wmiAccess}}"
+    type: text
+    description: Hosts accessible via WMI
+
+  - name: admin-access
+    path: "{{adminAccess}}"
+    type: text
+    description: Hosts with admin access
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup: Create output folders
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating lateral movement output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/lateral")'
+
+  # ---------------------------------------------------------------------------
+  # WinRM access check with netexec
+  # ---------------------------------------------------------------------------
+  - name: winrm-check
+    type: bash
+    log: "Checking WinRM access"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec winrm {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{winrmAccess}} 2>/dev/null; else netexec winrm {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{winrmAccess}} 2>/dev/null; fi || echo "No WinRM access" > {{winrmAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # WMI access check with netexec
+  # ---------------------------------------------------------------------------
+  - name: wmi-check
+    type: bash
+    log: "Checking WMI access"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec wmi {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{wmiAccess}} 2>/dev/null; else netexec wmi {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{wmiAccess}} 2>/dev/null; fi || echo "No WMI access" > {{wmiAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Check if credentials grant admin access (via SMB)
+  # ---------------------------------------------------------------------------
+  - name: admin-access-check
+    type: bash
+    log: "Checking if credentials grant admin access"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec smb {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{adminAccess}} 2>/dev/null; else netexec smb {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{adminAccess}} 2>/dev/null; fi || echo "No admin access" > {{adminAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Extract Pwn3d! lines (admin access)
+  # ---------------------------------------------------------------------------
+  - name: extract-admin-hosts
+    type: function
+    log: "Extracting admin access hosts"
+    functions:
+      - 'exec_cmd("grep -i \"pwn3d\\|admin\" {{adminAccess}} > {{psexecAccess}} 2>/dev/null || true")'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Summary
+  # ---------------------------------------------------------------------------
+  - name: summarize-lateral
+    type: function
+    log: "Summarizing lateral movement findings"
+    functions:
+      - 'log_info("Lateral movement checks complete for {{targetIp}}")'
+      - 'log_info("WinRM access: " + (file_length("{{winrmAccess}}") > 0))'
+      - 'log_info("WMI access: " + (file_length("{{wmiAccess}}") > 0))'

@@ -1,0 +1,98 @@
+kind: module
+name: do-ad-ldap
+description: LDAP interrogation on a single target
+tags: ad,ldap,active-directory
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+  - name: domainName
+    default: ""
+  - name: ldapPort
+    default: "389"
+
+  - name: ldapAnonymousOutput
+    default: "{{Output}}/ad/ldap/ldap-anonymous-{{TargetSpace}}.txt"
+  - name: ldapDomainDump
+    default: "{{Output}}/ad/ldap/ldap-domain-dump-{{TargetSpace}}.txt"
+  - name: ldapUsers
+    default: "{{Output}}/ad/ldap/ldap-users-{{TargetSpace}}.txt"
+  - name: ldapSigningCheck
+    default: "{{Output}}/ad/ldap/ldap-signing-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - ldapsearch
+    - netexec
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: ldap-domain-dump
+    path: "{{ldapDomainDump}}"
+    type: text
+    description: Full LDAP domain dump
+
+  - name: ldap-signing
+    path: "{{ldapSigningCheck}}"
+    type: text
+    description: LDAP signing status
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating LDAP output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/ldap")'
+
+  # ---------------------------------------------------------------------------
+  # LDAP anonymous bind check
+  # ---------------------------------------------------------------------------
+  - name: ldap-anonymous-bind
+    type: bash
+    log: "Testing LDAP anonymous bind"
+    commands:
+      - 'ldapsearch -x -H ldap://{{targetIp}}:{{ldapPort}} -b "" -s base -tt + > {{ldapAnonymousOutput}} 2>&1 || echo "LDAP anonymous bind FAILED" > {{ldapAnonymousOutput}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # LDAP domain dump
+  # ---------------------------------------------------------------------------
+  - name: ldap-domain-dump
+    type: bash
+    log: "Dumping AD domain info via LDAP"
+    pre_condition: 'file_exists("{{ldapAnonymousOutput}}")'
+    commands:
+      - 'BASE_DN=$(grep -i namingContexts {{ldapAnonymousOutput}} | head -1 | awk "{print \$2}"); [ -n "$BASE_DN" ] && ldapsearch -x -H ldap://{{targetIp}}:{{ldapPort}} -b "$BASE_DN" -E pr=1000/noprompt -LLL > {{ldapDomainDump}} 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # LDAP signing check
+  # ---------------------------------------------------------------------------
+  - name: ldap-signing-check
+    type: bash
+    log: "Checking LDAP signing requirements"
+    commands:
+      - 'netexec ldap {{targetIp}} -u "" -p "" -M ldap-signing > {{ldapSigningCheck}} 2>/dev/null || true'
+    on_error:
+      - action: continue

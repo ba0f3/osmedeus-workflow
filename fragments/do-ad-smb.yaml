@@ -1,0 +1,107 @@
+kind: module
+name: do-ad-smb
+description: SMB enumeration on a single target
+tags: ad,smb,enumeration,windows
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+  - name: domainName
+    default: ""
+
+  - name: smbSigningStatus
+    default: "{{Output}}/ad/smb/smb-signing-{{TargetSpace}}.txt"
+  - name: smbSharesDetail
+    default: "{{Output}}/ad/smb/smb-shares-{{TargetSpace}}.txt"
+  - name: smbNullSession
+    default: "{{Output}}/ad/smb/smb-null-session-{{TargetSpace}}.txt"
+  - name: smbAnonymousAccess
+    default: "{{Output}}/ad/smb/smb-anonymous-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - smbmap
+    - smbclient
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: smb-shares
+    path: "{{smbSharesDetail}}"
+    type: text
+    description: SMB share list
+
+  - name: smb-signing
+    path: "{{smbSigningStatus}}"
+    type: text
+    description: SMB signing requirements
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating SMB output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/smb")'
+
+  # ---------------------------------------------------------------------------
+  # SMB signing check
+  # ---------------------------------------------------------------------------
+  - name: smb-signing-check
+    type: bash
+    log: "Checking SMB signing requirements"
+    commands:
+      - 'netexec smb {{targetIp}} --gen-relay-list {{smbSigningStatus}} 2>/dev/null || echo "No hosts" > {{smbSigningStatus}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Null session check
+  # ---------------------------------------------------------------------------
+  - name: null-session-check
+    type: bash
+    log: "Testing SMB null session access"
+    commands:
+      - 'smbclient -L //{{targetIp}} -N -t 10 > {{smbNullSession}} 2>&1 || echo "Null session FAILED" > {{smbNullSession}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Shares via smbmap (anonymous)
+  # ---------------------------------------------------------------------------
+  - name: smbmap-anonymous-shares
+    type: bash
+    log: "Enumerating SMB shares (anonymous)"
+    commands:
+      - 'smbmap -H {{targetIp}} -u "" -p "" -d . -q > {{smbAnonymousAccess}} 2>/dev/null || echo "Anonymous access denied" > {{smbAnonymousAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Shares via netexec
+  # ---------------------------------------------------------------------------
+  - name: nxc-smb-shares
+    type: bash
+    log: "Enumerating SMB shares via netexec"
+    commands:
+      - 'netexec smb {{targetIp}} --shares > {{smbSharesDetail}} 2>/dev/null || echo "Share enumeration failed" > {{smbSharesDetail}}'
+    on_error:
+      - action: continue

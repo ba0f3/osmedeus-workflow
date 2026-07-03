@@ -1,0 +1,102 @@
+kind: module
+name: do-ad-lateral
+description: Lateral movement checks on a single target
+tags: ad,lateral-movement,winrm,wmi
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+  - name: domainName
+    default: ""
+  - name: authUser
+    default: ""
+  - name: authPass
+    default: ""
+  - name: authHash
+    default: ""
+
+  - name: winrmAccess
+    default: "{{Output}}/ad/lateral/winrm-access-{{TargetSpace}}.txt"
+  - name: wmiAccess
+    default: "{{Output}}/ad/lateral/wmi-access-{{TargetSpace}}.txt"
+  - name: adminAccess
+    default: "{{Output}}/ad/lateral/admin-access-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - netexec
+    - evil-winrm
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: winrm-access
+    path: "{{winrmAccess}}"
+    type: text
+    description: WinRM accessible hosts
+
+  - name: wmi-access
+    path: "{{wmiAccess}}"
+    type: text
+    description: WMI accessible hosts
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating lateral movement output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/lateral")'
+
+  # ---------------------------------------------------------------------------
+  # WinRM access check
+  # ---------------------------------------------------------------------------
+  - name: winrm-check
+    type: bash
+    log: "Checking WinRM access"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec winrm {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{winrmAccess}} 2>/dev/null; else netexec winrm {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{winrmAccess}} 2>/dev/null; fi || echo "No WinRM access" > {{winrmAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # WMI access check
+  # ---------------------------------------------------------------------------
+  - name: wmi-check
+    type: bash
+    log: "Checking WMI access"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec wmi {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{wmiAccess}} 2>/dev/null; else netexec wmi {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{wmiAccess}} 2>/dev/null; fi || echo "No WMI access" > {{wmiAccess}}'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Admin access check
+  # ---------------------------------------------------------------------------
+  - name: admin-access-check
+    type: bash
+    log: "Checking admin access via SMB"
+    pre_condition: '!is_empty("{{authUser}}")'
+    commands:
+      - 'if [ -n "{{authHash}}" ]; then netexec smb {{targetIp}} -u "{{authUser}}" -H "{{authHash}}" --local-auth > {{adminAccess}} 2>/dev/null; else netexec smb {{targetIp}} -u "{{authUser}}" -p "{{authPass}}" --local-auth > {{adminAccess}} 2>/dev/null; fi || true'
+    on_error:
+      - action: continue

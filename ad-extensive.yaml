@@ -1,0 +1,78 @@
+kind: flow
+name: ad-extensive
+description: Comprehensive AD security assessment — enum, Kerberos, LDAP, SMB, and lateral movement checks
+tags: ad, windows, active-directory, extensive, assessment
+help:
+  example_targets: ["10.10.10.10", "192.168.1.0/24"]
+  usage: |
+    osmedeus run -f ad-extensive -t 10.10.10.10
+    osmedeus run -f ad-extensive -t 192.168.1.0/24 -p 'domainName=corp.local' -p 'authUser=user' -p 'authPass=pass'
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: domainName
+    default: ""
+  - name: smbUser
+    default: ""
+  - name: smbPass
+    default: ""
+  - name: authUser
+    default: ""
+  - name: authPass
+    default: ""
+  - name: authHash
+    default: ""
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  variables:
+    - name: Target
+      type: cidr,ip
+      required: true
+
+# -----------------------------------------------------------------------------
+# MODULES SECTION
+# Execution order with dependencies
+# -----------------------------------------------------------------------------
+modules:
+  # ===========================================================================
+  # Phase 1: Active Directory Enumeration
+  # ===========================================================================
+  - name: ad-enum
+    path: common/ad-enum.yaml
+
+  # ===========================================================================
+  # Phase 2: Kerberos Attacks
+  # ===========================================================================
+  - name: ad-kerberos
+    path: common/ad-kerberos.yaml
+    depends_on:
+      - ad-enum
+
+  # ===========================================================================
+  # Phase 3: LDAP Interrogation
+  # ===========================================================================
+  - name: ad-ldap
+    path: common/ad-ldap.yaml
+    depends_on:
+      - ad-enum
+
+  # ===========================================================================
+  # Phase 4: SMB Enumeration
+  # ===========================================================================
+  - name: ad-smb
+    path: common/ad-smb.yaml
+    depends_on:
+      - ad-enum
+
+  # ===========================================================================
+  # Phase 5: Lateral Movement Checks
+  # ===========================================================================
+  - name: ad-lateral
+    path: common/ad-lateral.yaml
+    depends_on:
+      - ad-enum
