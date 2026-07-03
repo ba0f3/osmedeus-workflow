@@ -1,0 +1,99 @@
+kind: module
+name: do-scan-injection
+description: Test spider-discovered parameterized URLs with sqlmap and dalfox
+tags: vuln, injection, sqli, xss, sqlmap, security
+
+params:
+  - name: linkFile
+    default: "{{Output}}/links/links-{{TargetSpace}}.txt"
+  - name: contentDiscoveryUrlFile
+    default: "{{Output}}/content-discovery/content-discovery-url-{{TargetSpace}}.txt"
+  - name: injectableFile
+    default: "{{Output}}/vulnscan/injectable-urls-{{TargetSpace}}.txt"
+  - name: injectionDir
+    default: "{{Output}}/vulnscan/injection"
+
+  - name: injectionLimit
+    default: "500"
+  - name: sqlmapRisk
+    default: "1"
+  - name: sqlmapLevel
+    default: "2"
+  - name: injectionThreads
+    default: "{{ threads }}"
+  - name: sqlmapTimeout
+    default: "2h"
+
+  - name: defaultUA
+    default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
+
+dependencies:
+  commands:
+    - sqlmap
+    - dalfox
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+reports:
+  - name: sqli-results
+    path: "{{injectionDir}}/sqlmap-summary.txt"
+    type: txt
+    description: sqlmap injection scan summary
+
+  - name: xss-results
+    path: "{{injectionDir}}/dalfox-results.txt"
+    type: txt
+    description: Dalfox XSS scan results
+
+steps:
+  - name: create-output-folders
+    type: function
+    log: "Creating injection scan output folders"
+    functions:
+      - 'create_folder("{{Output}}/vulnscan")'
+      - 'create_folder("{{injectionDir}}")'
+
+  - name: build-injectable-url-list
+    type: bash
+    log: "Building injectable URL list from spider and content-discovery output"
+    commands:
+      - |
+        {
+          [ -f "{{linkFile}}" ] && cat "{{linkFile}}"
+          [ -f "{{contentDiscoveryUrlFile}}" ] && cat "{{contentDiscoveryUrlFile}}"
+        } | grep '?' | grep -Fi '{{Target}}' | sort -u | head -n {{injectionLimit}} > "{{injectableFile}}"
+    on_error:
+      - action: continue
+
+  - name: sqlmap-injection-scan
+    type: bash
+    log: "Running sqlmap on parameterized URLs"
+    pre_condition: 'file_length("{{injectableFile}}") > 0'
+    commands:
+      - |
+        timeout -k 1m {{sqlmapTimeout}} sqlmap -m {{injectableFile}} \
+          --batch --random-agent \
+          --level={{sqlmapLevel}} --risk={{sqlmapRisk}} \
+          --threads={{injectionThreads}} \
+          --output-dir={{injectionDir}}/sqlmap \
+          --flush-session \
+          2>&1 | tee {{injectionDir}}/sqlmap-run.log || true
+      - find {{injectionDir}}/sqlmap -name 'log' -exec cat {} \; > {{injectionDir}}/sqlmap-summary.txt 2>/dev/null || true
+    on_error:
+      - action: continue
+
+  - name: dalfox-xss-scan
+    type: bash
+    log: "Running Dalfox XSS scan on injectable URLs"
+    pre_condition: 'file_length("{{injectableFile}}") > 0'
+    commands:
+      - |
+        dalfox file {{injectableFile}} \
+          --silence \
+          --worker {{injectionThreads}} \
+          --user-agent "{{defaultUA}}" \
+          -o {{injectionDir}}/dalfox-results.txt || true
+    on_error:
+      - action: continue

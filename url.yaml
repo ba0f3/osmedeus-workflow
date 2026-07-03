@@ -25,3 +25,13 @@ modules:
     path: fragments/do-scan-vuln-thorough.yaml
     depends_on:
       - do-recon-http-fp
+
+  - name: do-recon-spider
+    path: fragments/do-recon-spider.yaml
+    depends_on:
+      - do-recon-http-fp
+
+  - name: do-scan-injection
+    path: fragments/do-scan-injection.yaml
+    depends_on:
+      - do-recon-spider

@@ -118,3 +118,11 @@ modules:
     path: common/scan-content.yaml
     depends_on:
       - recon-http-fp
+
+  # ===========================================================================
+  # Phase 11: Injection Scanning (SQLi / XSS on crawled URLs)
+  # ===========================================================================
+  - name: scan-injection
+    path: common/scan-injection.yaml
+    depends_on:
+      - recon-spider
