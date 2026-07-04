@@ -1,0 +1,319 @@
+# =============================================================================
+# Module Workflow: Entity and Related Domain Discovery
+# =============================================================================
+
+kind: module
+name: enum-entity
+description: Discover related domains, certificate siblings, CNAME-linked properties, RDAP entity hints, and optional related-domain subdomains
+tags: entity, related-domain, osint, certificate, rdap, dns
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: subdomainFile
+    default: "{{Output}}/subdomain/subdomain-{{TargetSpace}}.txt"
+  - name: dnsFile
+    default: "{{Output}}/probing/dns-{{TargetSpace}}.txt"
+  - name: entityDir
+    default: "{{Output}}/entity"
+  - name: certRawFile
+    default: "{{Output}}/entity/crtsh-{{TargetSpace}}.json"
+  - name: rdapRawFile
+    default: "{{Output}}/entity/rdap-{{TargetSpace}}.json"
+  - name: certDomainsFile
+    default: "{{Output}}/entity/certificate-domains-{{TargetSpace}}.txt"
+  - name: cnameDomainsFile
+    default: "{{Output}}/entity/cname-domains-{{TargetSpace}}.txt"
+  - name: relatedRootDomainsFile
+    default: "{{Output}}/entity/related-root-domains-{{TargetSpace}}.txt"
+  - name: relatedDomainsFile
+    default: "{{Output}}/entity/related-domains-{{TargetSpace}}.txt"
+  - name: relatedSubdomainsFile
+    default: "{{Output}}/entity/related-subdomains-{{TargetSpace}}.txt"
+  - name: relatedHttpFile
+    default: "{{Output}}/entity/related-http-{{TargetSpace}}.txt"
+  - name: entityProfileFile
+    default: "{{Output}}/entity/entity-profile-{{TargetSpace}}.json"
+  - name: entityMarkdownReport
+    default: "{{Output}}/entity/entity-report-{{TargetSpace}}.md"
+
+  - name: enableEntityDiscovery
+    type: bool
+    default: true
+  - name: enableRelatedSubdomainEnum
+    type: bool
+    default: false
+  - name: enableRelatedDomainExpansion
+    type: bool
+    default: false
+  - name: entityTimeout
+    default: "10m"
+  - name: relatedSubfinderThreads
+    default: "{{ threads * 3 }}"
+  - name: httpThreads
+    default: "{{ threads * 4 }}"
+  - name: httpTimeout
+    default: "15"
+  - name: defaultUA
+    default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
+  - name: subfinderConfig
+    default: "{{ExternalConfigs}}/subfinder-provider-config.yaml"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - curl
+    - python3
+    - subfinder
+
+  variables:
+    - name: Target
+      type: domain
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: related-root-domains
+    path: "{{relatedRootDomainsFile}}"
+    type: text
+    description: Candidate related registered domains
+
+  - name: related-domains
+    path: "{{relatedDomainsFile}}"
+    type: text
+    description: Candidate related hostnames and domains
+
+  - name: entity-report
+    path: "{{entityMarkdownReport}}"
+    type: md
+    description: Entity and related-domain discovery report
+
+  - name: related-http
+    path: "{{relatedHttpFile}}"
+    type: text
+    description: Optional live HTTP surfaces from explicitly enabled related-domain expansion
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-output-folders
+    type: function
+    log: "Creating entity discovery output folders"
+    functions:
+      - 'create_folder("{{entityDir}}")'
+      - 'create_folder("{{Output}}/subdomain")'
+
+  - name: certificate-transparency-discovery
+    type: bash
+    log: "Discovering certificate sibling domains from crt.sh"
+    pre_condition: '{{enableEntityDiscovery}}'
+    commands:
+      - |
+        timeout -k 30s {{entityTimeout}} curl -ksS --max-time 120 \
+          "https://crt.sh/?q=%25.{{Target}}&output=json" \
+          -o "{{certRawFile}}" || true
+    on_error:
+      - action: continue
+
+  - name: rdap-entity-profile
+    type: bash
+    log: "Fetching RDAP entity profile"
+    pre_condition: '{{enableEntityDiscovery}}'
+    commands:
+      - |
+        timeout -k 30s {{entityTimeout}} curl -ksS --max-time 120 \
+          "https://rdap.org/domain/{{Target}}" \
+          -o "{{rdapRawFile}}" || true
+    on_error:
+      - action: continue
+
+  - name: normalize-related-entity-data
+    type: bash
+    log: "Normalizing related entity and domain candidates"
+    pre_condition: '{{enableEntityDiscovery}}'
+    commands:
+      - |
+        python3 - "{{Target}}" "{{certRawFile}}" "{{rdapRawFile}}" "{{dnsFile}}" \
+          "{{certDomainsFile}}" "{{cnameDomainsFile}}" "{{relatedRootDomainsFile}}" \
+          "{{relatedDomainsFile}}" "{{entityProfileFile}}" "{{entityMarkdownReport}}" <<'PY'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        target = sys.argv[1].strip().lower().rstrip(".")
+        cert_raw = Path(sys.argv[2])
+        rdap_raw = Path(sys.argv[3])
+        dns_file = Path(sys.argv[4])
+        cert_domains_file = Path(sys.argv[5])
+        cname_domains_file = Path(sys.argv[6])
+        roots_file = Path(sys.argv[7])
+        related_file = Path(sys.argv[8])
+        profile_file = Path(sys.argv[9])
+        md_file = Path(sys.argv[10])
+
+        common_second_level = {
+            "ac", "co", "com", "edu", "go", "gov", "net", "org", "mil", "or",
+            "ne", "nom", "idv", "biz", "info", "name", "pro",
+        }
+        noisy_roots = {
+            "amazonaws.com", "cloudfront.net", "azurewebsites.net", "cloudapp.net",
+            "googleusercontent.com", "github.io", "herokuapp.com", "pages.dev",
+            "workers.dev", "wpengine.com", "fastly.net", "akamaihd.net",
+        }
+
+        def clean_host(value):
+            value = (value or "").strip().lower().rstrip(".")
+            value = value.replace("*.", "")
+            if "://" in value:
+                value = urlparse(value).hostname or ""
+            value = re.sub(r"[^a-z0-9_.-]", "", value)
+            if not value or "." not in value:
+                return ""
+            return value
+
+        def root_domain(host):
+            parts = clean_host(host).split(".")
+            if len(parts) < 2:
+                return ""
+            if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in common_second_level:
+                return ".".join(parts[-3:])
+            return ".".join(parts[-2:])
+
+        def brand_token(domain):
+            root = root_domain(domain)
+            return root.split(".")[0] if root else domain.split(".")[0]
+
+        target_root = root_domain(target)
+        target_brand = brand_token(target)
+        cert_domains = set()
+        cname_domains = set()
+
+        if cert_raw.exists() and cert_raw.stat().st_size > 0:
+            try:
+                rows = json.loads(cert_raw.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(rows, dict):
+                    rows = [rows]
+                for row in rows:
+                    for key in ("name_value", "common_name"):
+                        value = row.get(key) if isinstance(row, dict) else ""
+                        for item in str(value or "").splitlines():
+                            host = clean_host(item)
+                            if host:
+                                cert_domains.add(host)
+            except Exception:
+                pass
+
+        if dns_file.exists():
+            for line in dns_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                if " CNAME " not in line:
+                    continue
+                host = clean_host(line.rsplit(" CNAME ", 1)[-1])
+                if host:
+                    cname_domains.add(host)
+
+        candidate_hosts = cert_domains | cname_domains
+        candidate_roots = set()
+        for host in candidate_hosts:
+            root = root_domain(host)
+            if not root or root == target_root or root in noisy_roots:
+                continue
+            if host.endswith("." + target_root):
+                continue
+            # Keep higher-confidence candidates: shared brand token, same cert set,
+            # or CNAME-linked SaaS/vendor property observed from target DNS.
+            if target_brand in root.replace("-", "") or host in cname_domains:
+                candidate_roots.add(root)
+
+        rdap_profile = {}
+        if rdap_raw.exists() and rdap_raw.stat().st_size > 0:
+            try:
+                rdap = json.loads(rdap_raw.read_text(encoding="utf-8", errors="replace"))
+                rdap_profile = {
+                    "ldhName": rdap.get("ldhName"),
+                    "nameservers": [ns.get("ldhName") for ns in rdap.get("nameservers", []) if ns.get("ldhName")],
+                    "entities": [
+                        {
+                            "roles": ent.get("roles", []),
+                            "handle": ent.get("handle"),
+                            "vcard": ent.get("vcardArray", [None, []])[1] if ent.get("vcardArray") else [],
+                        }
+                        for ent in rdap.get("entities", [])
+                    ],
+                }
+            except Exception:
+                rdap_profile = {}
+
+        cert_domains_file.write_text("\n".join(sorted(cert_domains)) + ("\n" if cert_domains else ""), encoding="utf-8")
+        cname_domains_file.write_text("\n".join(sorted(cname_domains)) + ("\n" if cname_domains else ""), encoding="utf-8")
+        roots_file.write_text("\n".join(sorted(candidate_roots)) + ("\n" if candidate_roots else ""), encoding="utf-8")
+        related_file.write_text("\n".join(sorted(candidate_hosts)) + ("\n" if candidate_hosts else ""), encoding="utf-8")
+
+        profile = {
+            "target": target,
+            "target_root": target_root,
+            "target_brand": target_brand,
+            "certificate_domains_count": len(cert_domains),
+            "cname_domains_count": len(cname_domains),
+            "related_root_domains_count": len(candidate_roots),
+            "related_root_domains": sorted(candidate_roots),
+            "rdap": rdap_profile,
+        }
+        profile_file.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        md = [
+            f"# Entity Discovery - {target}",
+            "",
+            "## Summary",
+            f"- Certificate domains: {len(cert_domains)}",
+            f"- CNAME-linked domains: {len(cname_domains)}",
+            f"- Candidate related root domains: {len(candidate_roots)}",
+            "",
+            "## Candidate Related Root Domains",
+        ]
+        md.extend(f"- {item}" for item in sorted(candidate_roots)[:200])
+        if not candidate_roots:
+            md.append("- None")
+        md.extend(["", "## RDAP Nameservers"])
+        for ns in rdap_profile.get("nameservers", [])[:50]:
+            md.append(f"- {ns}")
+        md_file.write_text("\n".join(md) + "\n", encoding="utf-8")
+        print(f"related roots: {len(candidate_roots)}; cert domains: {len(cert_domains)}; cname domains: {len(cname_domains)}")
+        PY
+    on_error:
+      - action: continue
+
+  - name: enumerate-related-subdomains
+    type: bash
+    log: "Optionally enumerating subdomains for candidate related root domains"
+    pre_condition: '{{enableRelatedSubdomainEnum}} && file_length("{{relatedRootDomainsFile}}") > 0'
+    commands:
+      - |
+        timeout -k 1m {{entityTimeout}} subfinder -dL "{{relatedRootDomainsFile}}" \
+          -provider-config "{{subfinderConfig}}" \
+          -t {{relatedSubfinderThreads}} \
+          -o "{{relatedSubdomainsFile}}" || true
+        sort -u "{{relatedSubdomainsFile}}" -o "{{relatedSubdomainsFile}}" 2>/dev/null || true
+    on_error:
+      - action: continue
+
+  - name: probe-related-http-surfaces
+    type: bash
+    log: "Optionally probing related-domain subdomains into a separate artifact"
+    pre_condition: '{{enableRelatedDomainExpansion}} && file_length("{{relatedSubdomainsFile}}") > 0'
+    commands:
+      - |
+        cat "{{relatedSubdomainsFile}}" | pd-httpx -H "{{defaultUA}}" \
+          -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color \
+          -silent -status-code -title -tech-detect -follow-host-redirects \
+          -include-chain > "{{relatedHttpFile}}" || true
+        sort -u "{{relatedHttpFile}}" -o "{{relatedHttpFile}}" 2>/dev/null || true
+    on_error:
+      - action: continue

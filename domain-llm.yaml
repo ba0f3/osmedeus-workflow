@@ -52,7 +52,15 @@ modules:
       - enum-subdomain
 
   # ===========================================================================
-  # Phase 3: Fingerprinting
+  # Phase 3: Entity and Related Domain Discovery
+  # ===========================================================================
+  - name: enum-entity
+    path: common/enum-entity.yaml
+    depends_on:
+      - probe-dns
+
+  # ===========================================================================
+  # Phase 4: Fingerprinting
   # ===========================================================================
   - name: recon-http-fp
     path: common/recon-http-fp.yaml
@@ -60,7 +68,7 @@ modules:
       - probe-dns
 
   # ===========================================================================
-  # Phase 4: Screenshots
+  # Phase 5: Screenshots
   # ===========================================================================
   - name: recon-screenshot
     path: common/recon-screenshot.yaml
@@ -68,7 +76,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 5: Spidering
+  # Phase 6: Spidering
   # ===========================================================================
   - name: recon-spider
     path: common/recon-spider.yaml
@@ -76,7 +84,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 6: Archiving
+  # Phase 7: Archiving
   # ===========================================================================
   - name: util-archive
     path: common/util-archive.yaml
@@ -84,7 +92,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 7: IP Space Enumeration
+  # Phase 8: IP Space Enumeration
   # ===========================================================================
   - name: enum-ipspace
     path: common/enum-ipspace.yaml
@@ -92,7 +100,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 8: Port Scanning
+  # Phase 9: Port Scanning
   # ===========================================================================
   - name: probe-port
     path: common/probe-port.yaml
@@ -100,7 +108,7 @@ modules:
       - enum-ipspace
 
   # ===========================================================================
-  # Phase 9: Network Service Audit
+  # Phase 10: Network Service Audit
   # ===========================================================================
   - name: scan-service
     path: common/scan-service.yaml
@@ -108,7 +116,7 @@ modules:
       - enum-ipspace
 
   # ===========================================================================
-  # Phase 10: Content Discovery
+  # Phase 11: Content Discovery
   # ===========================================================================
   - name: scan-content
     path: common/scan-content.yaml
@@ -116,7 +124,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 11: LLM Surface Tightening
+  # Phase 12: LLM Surface Tightening
   # ===========================================================================
   - name: llm-surface-analysis
     path: common/llm-surface-analysis.yaml
@@ -126,9 +134,10 @@ modules:
       - util-archive
       - probe-port
       - scan-service
+      - enum-entity
 
   # ===========================================================================
-  # Phase 12: LLM-Guided Surface Scanning
+  # Phase 13: LLM-Guided Surface Scanning
   # ===========================================================================
   - name: llm-guided-surface-scan
     path: common/llm-guided-surface-scan.yaml
@@ -136,7 +145,7 @@ modules:
       - llm-surface-analysis
 
   # ===========================================================================
-  # Phase 13: Baseline Vulnerability Scanning
+  # Phase 14: Baseline Vulnerability Scanning
   # ===========================================================================
   - name: scan-vuln
     path: common/scan-vuln.yaml
@@ -144,7 +153,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 14: LLM-Guided Vulnerability Scanning
+  # Phase 15: LLM-Guided Vulnerability Scanning
   # ===========================================================================
   - name: llm-guided-vuln-scan
     path: common/llm-guided-vuln-scan.yaml
@@ -152,7 +161,7 @@ modules:
       - scan-vuln
 
   # ===========================================================================
-  # Phase 15: Thorough Vulnerability Scanning with Vigolium
+  # Phase 16: Thorough Vulnerability Scanning with Vigolium
   # ===========================================================================
   - name: scan-vuln-thorough
     path: common/scan-vuln-thorough.yaml
@@ -160,7 +169,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 16: Injection Scanning on Tightened Crawled URLs
+  # Phase 17: Injection Scanning on Tightened Crawled URLs
   # ===========================================================================
   - name: scan-injection
     path: common/scan-injection.yaml
@@ -169,7 +178,7 @@ modules:
       - scan-content
 
   # ===========================================================================
-  # Phase 17: LLM-Guided Injection Scanning
+  # Phase 18: LLM-Guided Injection Scanning
   # ===========================================================================
   - name: llm-guided-injection
     path: common/llm-guided-injection.yaml
@@ -177,7 +186,7 @@ modules:
       - scan-injection
 
   # ===========================================================================
-  # Phase 18: Autonomous Tuning Controller
+  # Phase 19: Autonomous Tuning Controller
   # ===========================================================================
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml

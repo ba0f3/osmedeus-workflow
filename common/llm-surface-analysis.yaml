@@ -29,6 +29,12 @@ params:
     default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
   - name: serviceJsonlOutput
     default: "{{Output}}/services/services-{{TargetSpace}}.jsonl"
+  - name: entityProfileFile
+    default: "{{Output}}/entity/entity-profile-{{TargetSpace}}.json"
+  - name: relatedRootDomainsFile
+    default: "{{Output}}/entity/related-root-domains-{{TargetSpace}}.txt"
+  - name: relatedHttpFile
+    default: "{{Output}}/entity/related-http-{{TargetSpace}}.txt"
 
   - name: llmDir
     default: "{{Output}}/llm"
@@ -100,7 +106,8 @@ steps:
         python3 - "{{llmDir}}/context-{{TargetSpace}}.md" "{{llmArtifactLineLimit}}" \
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{httpInterestingJsonFile}}" \
           "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" "{{contentDiscoverUrlsFile}}" \
-          "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{serviceJsonlOutput}}" <<'PY'
+          "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{serviceJsonlOutput}}" \
+          "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" <<'PY'
         import sys
         from pathlib import Path
 
@@ -163,6 +170,7 @@ steps:
          Markdown with nuclei template tags or categories worth re-running and the evidence for each suggestion.
 
       Keep every suggested URL in scope for {{Target}}. Do not invent unrelated domains.
+      Treat related-domain artifacts as discovery intelligence. Do not scan related root domains unless they are already present in the provided in-scope URL or host artifacts.
     max_iterations: 12
     parallel_tool_calls: true
     agent_tools:
