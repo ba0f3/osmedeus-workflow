@@ -1,8 +1,15 @@
+# =============================================================================
+# Module Workflow: Injection Scanning (SQLi / XSS)
+# =============================================================================
+
 kind: module
 name: do-scan-injection
 description: Test spider-discovered parameterized URLs with sqlmap and dalfox
 tags: vuln, injection, sqli, xss, sqlmap, security
 
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
 params:
   - name: linkFile
     default: "{{Output}}/links/links-{{TargetSpace}}.txt"
@@ -10,8 +17,22 @@ params:
     default: "{{Output}}/content-discovery/content-discovery-url-{{TargetSpace}}.txt"
   - name: injectableFile
     default: "{{Output}}/vulnscan/injectable-urls-{{TargetSpace}}.txt"
+  - name: dalfoxInputFile
+    default: "{{Output}}/vulnscan/injectable-urls-dalfox-{{TargetSpace}}.txt"
   - name: injectionDir
     default: "{{Output}}/vulnscan/injection"
+  - name: sqlmapFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/sqlmap-findings-{{TargetSpace}}.jsonl"
+  - name: dalfoxFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/dalfox-findings-{{TargetSpace}}.jsonl"
+  - name: dalfoxRawJsonl
+    default: "{{Output}}/vulnscan/injection/dalfox-raw-{{TargetSpace}}.jsonl"
+  - name: injectionFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
+  - name: injectionCleanJsonl
+    default: "{{Output}}/vulnscan/injection/injection-findings-clean-{{TargetSpace}}.jsonl"
+  - name: injectionMarkdownReport
+    default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.md"
 
   - name: injectionLimit
     default: "500"
@@ -27,15 +48,23 @@ params:
   - name: defaultUA
     default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
 
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
 dependencies:
   commands:
     - sqlmap
     - dalfox
+    - python3
+
   variables:
     - name: Target
       type: string
       required: true
 
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
 reports:
   - name: sqli-results
     path: "{{injectionDir}}/sqlmap-summary.txt"
@@ -47,6 +76,19 @@ reports:
     type: txt
     description: Dalfox XSS scan results
 
+  - name: injection-findings-jsonl
+    path: "{{injectionFindingsJsonl}}"
+    type: jsonl
+    description: Injection findings in nuclei-compatible JSONL for DB import
+
+  - name: injection-markdown-report
+    path: "{{injectionMarkdownReport}}"
+    type: md
+    description: Markdown report of injection findings
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
 steps:
   - name: create-output-folders
     type: function
@@ -84,16 +126,318 @@ steps:
     on_error:
       - action: continue
 
-  - name: dalfox-xss-scan
+  # Convert sqlmap CSV / host logs into nuclei-compatible JSONL for DB import
+  - name: normalize-sqlmap-findings
     type: bash
-    log: "Running Dalfox XSS scan on injectable URLs"
+    log: "Normalizing sqlmap findings for vulnerability DB import"
+    pre_condition: 'file_exists("{{injectionDir}}/sqlmap")'
+    commands:
+      - |
+        python3 - "{{injectionDir}}/sqlmap" "{{sqlmapFindingsJsonl}}" <<'PY'
+        import csv
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        sqlmap_dir = Path(sys.argv[1])
+        out_path = Path(sys.argv[2])
+        findings = []
+        seen = set()
+
+        def add_finding(url, place="", parameter="", techniques="", note=""):
+            url = (url or "").strip()
+            if not url or url in seen:
+                return
+            seen.add(url)
+            host = urlparse(url).hostname or ""
+            techniques = (techniques or "").strip()
+            place = (place or "").strip()
+            parameter = (parameter or "").strip()
+            note = (note or "").strip()
+            desc_parts = []
+            if place or parameter:
+                desc_parts.append(f"{place} parameter '{parameter}'".strip())
+            if techniques:
+                desc_parts.append(f"techniques: {techniques}")
+            if note:
+                desc_parts.append(note)
+            description = "SQL injection confirmed by sqlmap"
+            if desc_parts:
+                description = f"{description} ({'; '.join(desc_parts)})"
+            extracted = []
+            if parameter:
+                extracted.append(f"parameter={parameter}")
+            if place:
+                extracted.append(f"place={place}")
+            if techniques:
+                extracted.append(f"techniques={techniques}")
+            findings.append({
+                "template-id": "sqlmap-sqli",
+                "info": {
+                    "name": "SQL Injection",
+                    "severity": "critical",
+                    "tags": ["sqli", "sqlmap", "injection"],
+                    "description": description,
+                },
+                "type": "http",
+                "host": host,
+                "url": url,
+                "matched-at": url,
+                "extracted-results": extracted,
+            })
+
+        for csv_path in sorted(sqlmap_dir.glob("results-*.csv")):
+            with csv_path.open(newline="", encoding="utf-8", errors="replace") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    add_finding(
+                        row.get("Target URL") or row.get("TargetURL") or "",
+                        row.get("Place") or "",
+                        row.get("Parameter") or "",
+                        row.get("Technique(s)") or row.get("Techniques") or "",
+                        row.get("Note(s)") or row.get("Notes") or "",
+                    )
+
+        # Fallback when CSV is missing but per-host logs contain injection points
+        if not findings:
+            for log_path in sorted(sqlmap_dir.glob("*/log")):
+                text = log_path.read_text(encoding="utf-8", errors="replace")
+                if "injection point" not in text.lower():
+                    continue
+                target_file = log_path.parent / "target.txt"
+                url = ""
+                if target_file.exists():
+                    url = target_file.read_text(encoding="utf-8", errors="replace").split()[0]
+                parameter = ""
+                place = ""
+                techniques = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("Parameter:"):
+                        # Parameter: id (GET)
+                        body = line.split(":", 1)[1].strip()
+                        if "(" in body and body.endswith(")"):
+                            parameter = body.split("(", 1)[0].strip()
+                            place = body.rsplit("(", 1)[1].rstrip(")").strip()
+                        else:
+                            parameter = body
+                    elif line.startswith("Type:"):
+                        techniques.append(line.split(":", 1)[1].strip())
+                add_finding(url, place, parameter, ", ".join(techniques))
+
+        out_path.write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in findings),
+            encoding="utf-8",
+        )
+        print(f"normalized {len(findings)} sqlmap finding(s) -> {out_path}")
+        PY
+    on_error:
+      - action: continue
+
+  # Drop URLs already confirmed by sqlmap so dalfox does not re-scan them
+  - name: filter-sqlmap-urls-for-dalfox
+    type: bash
+    log: "Removing sqlmap findings from dalfox input list"
     pre_condition: 'file_length("{{injectableFile}}") > 0'
     commands:
       - |
-        dalfox file {{injectableFile}} \
+        python3 - "{{injectableFile}}" "{{sqlmapFindingsJsonl}}" "{{dalfoxInputFile}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlsplit, urlunsplit
+
+        injectable_path = Path(sys.argv[1])
+        sqlmap_findings_path = Path(sys.argv[2])
+        out_path = Path(sys.argv[3])
+
+        def normalize_url(url: str) -> str:
+            url = (url or "").strip()
+            if not url:
+                return ""
+            parts = urlsplit(url)
+            # Compare scheme/host/path/query; ignore fragment and trailing slash on path
+            path = parts.path.rstrip("/") or "/"
+            return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+        skip_urls = set()
+        if sqlmap_findings_path.is_file() and sqlmap_findings_path.stat().st_size > 0:
+            for line in sqlmap_findings_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for key in ("url", "matched-at"):
+                    normalized = normalize_url(row.get(key) or "")
+                    if normalized:
+                        skip_urls.add(normalized)
+
+        kept = []
+        removed = 0
+        for line in injectable_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            url = line.strip()
+            if not url:
+                continue
+            if normalize_url(url) in skip_urls:
+                removed += 1
+                continue
+            kept.append(url)
+
+        out_path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+        print(
+            f"dalfox input: {len(kept)} url(s) "
+            f"(removed {removed} sqlmap finding url(s) from {len(kept) + removed})"
+        )
+        PY
+      - |
+        # Fallback: if filter did not produce output, scan the full injectable list
+        if [ ! -f "{{dalfoxInputFile}}" ]; then
+          cp "{{injectableFile}}" "{{dalfoxInputFile}}"
+        fi
+    on_error:
+      - action: continue
+
+  - name: dalfox-xss-scan
+    type: bash
+    log: "Running Dalfox XSS scan on injectable URLs (excluding sqlmap findings)"
+    pre_condition: 'file_length("{{dalfoxInputFile}}") > 0'
+    commands:
+      - |
+        dalfox file {{dalfoxInputFile}} \
           --silence \
           --worker {{injectionThreads}} \
           --user-agent "{{defaultUA}}" \
-          -o {{injectionDir}}/dalfox-results.txt || true
+          --format jsonl \
+          -o {{dalfoxRawJsonl}} || true
+      - |
+        if [ -f "{{dalfoxRawJsonl}}" ]; then
+          cp "{{dalfoxRawJsonl}}" "{{injectionDir}}/dalfox-results.txt"
+        else
+          : > "{{injectionDir}}/dalfox-results.txt"
+        fi
+    on_error:
+      - action: continue
+
+  # Convert dalfox JSONL into nuclei-compatible findings
+  - name: normalize-dalfox-findings
+    type: bash
+    log: "Normalizing dalfox findings for vulnerability DB import"
+    pre_condition: 'file_length("{{dalfoxRawJsonl}}") > 0'
+    commands:
+      - |
+        python3 - "{{dalfoxRawJsonl}}" "{{dalfoxFindingsJsonl}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        src = Path(sys.argv[1])
+        out_path = Path(sys.argv[2])
+        findings = []
+        seen = set()
+
+        for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # Dalfox vulnerability records are type "V"
+            record_type = str(row.get("type") or row.get("Type") or "").upper()
+            if record_type and record_type not in {"V", "VULN", "VULNERABILITY"}:
+                continue
+            url = (
+                row.get("data")
+                or row.get("poc")
+                or row.get("url")
+                or row.get("matched-at")
+                or ""
+            ).strip()
+            if not url:
+                continue
+            param = str(row.get("param") or row.get("parameter") or "").strip()
+            key = (url, param)
+            if key in seen:
+                continue
+            seen.add(key)
+            severity = str(row.get("severity") or "high").strip().lower()
+            if severity not in {"info", "low", "medium", "high", "critical", "unknown"}:
+                severity = "high"
+            host = urlparse(url).hostname or ""
+            inject_type = str(row.get("inject_type") or row.get("type") or "xss").strip()
+            payload = str(row.get("payload") or "").strip()
+            extracted = []
+            if param:
+                extracted.append(f"parameter={param}")
+            if inject_type:
+                extracted.append(f"inject_type={inject_type}")
+            if payload:
+                extracted.append(f"payload={payload[:200]}")
+            findings.append({
+                "template-id": "dalfox-xss",
+                "info": {
+                    "name": "Cross-Site Scripting (XSS)",
+                    "severity": severity,
+                    "tags": ["xss", "dalfox", "injection"],
+                    "description": f"XSS confirmed by dalfox on parameter '{param}'" if param else "XSS confirmed by dalfox",
+                },
+                "type": "http",
+                "host": host,
+                "url": url,
+                "matched-at": url,
+                "extracted-results": extracted,
+            })
+
+        out_path.write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in findings),
+            encoding="utf-8",
+        )
+        print(f"normalized {len(findings)} dalfox finding(s) -> {out_path}")
+        PY
+    on_error:
+      - action: continue
+
+  - name: merge-injection-findings
+    type: bash
+    log: "Merging sqlmap and dalfox findings"
+    commands:
+      - |
+        : > "{{injectionFindingsJsonl}}"
+        [ -f "{{sqlmapFindingsJsonl}}" ] && cat "{{sqlmapFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+        [ -f "{{dalfoxFindingsJsonl}}" ] && cat "{{dalfoxFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+    on_error:
+      - action: continue
+
+  - name: injection-report-processing
+    type: function
+    log: "Processing injection findings report"
+    pre_condition: 'file_length("{{injectionFindingsJsonl}}") > 0'
+    functions:
+      - 'jsonl_filter("{{injectionFindingsJsonl}}", "{{injectionCleanJsonl}}", "template-id,info.name,info.severity,matched-at,host,url,extracted-results")'
+      - 'sort_unix("{{injectionCleanJsonl}}")'
+
+  - name: generate-injection-md-report
+    type: function
+    log: "Generating injection findings markdown report"
+    pre_condition: 'file_length("{{injectionCleanJsonl}}") > 0'
+    functions:
+      - 'convert_jsonl_to_markdown("{{injectionCleanJsonl}}", "{{injectionMarkdownReport}}")'
+      - 'send_telegram_file("{{injectionMarkdownReport}}", "Injection Scan Results")'
+    on_error:
+      - action: continue
+
+  - name: process-injection-findings-in-db
+    type: function
+    log: "Importing injection findings into vulnerability database"
+    pre_condition: 'file_length("{{injectionFindingsJsonl}}") > 0'
+    functions:
+      - 'db_total_vulns("{{injectionFindingsJsonl}}")'
+      - 'db_import_vuln_from_file("{{TargetSpace}}", "{{injectionFindingsJsonl}}")'
     on_error:
       - action: continue
