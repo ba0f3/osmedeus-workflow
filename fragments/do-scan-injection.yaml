@@ -44,6 +44,9 @@ params:
     default: "{{ threads }}"
   - name: sqlmapTimeout
     default: "2h"
+  - name: enableDalfox
+    type: bool
+    default: true
 
   - name: defaultUA
     default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
@@ -239,7 +242,7 @@ steps:
   - name: filter-sqlmap-urls-for-dalfox
     type: bash
     log: "Removing sqlmap findings from dalfox input list"
-    pre_condition: 'file_length("{{injectableFile}}") > 0'
+    pre_condition: '{{enableDalfox}} && file_length("{{injectableFile}}") > 0'
     commands:
       - |
         python3 - "{{injectableFile}}" "{{sqlmapFindingsJsonl}}" "{{dalfoxInputFile}}" <<'PY'
@@ -304,7 +307,7 @@ steps:
   - name: dalfox-xss-scan
     type: bash
     log: "Running Dalfox XSS scan on injectable URLs (excluding sqlmap findings)"
-    pre_condition: 'file_length("{{dalfoxInputFile}}") > 0'
+    pre_condition: '{{enableDalfox}} && file_length("{{dalfoxInputFile}}") > 0'
     commands:
       - |
         dalfox file {{dalfoxInputFile}} \
@@ -326,7 +329,7 @@ steps:
   - name: normalize-dalfox-findings
     type: bash
     log: "Normalizing dalfox findings for vulnerability DB import"
-    pre_condition: 'file_length("{{dalfoxRawJsonl}}") > 0'
+    pre_condition: '{{enableDalfox}} && file_length("{{dalfoxRawJsonl}}") > 0'
     commands:
       - |
         python3 - "{{dalfoxRawJsonl}}" "{{dalfoxFindingsJsonl}}" <<'PY'
@@ -409,8 +412,12 @@ steps:
     commands:
       - |
         : > "{{injectionFindingsJsonl}}"
-        [ -f "{{sqlmapFindingsJsonl}}" ] && cat "{{sqlmapFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
-        [ -f "{{dalfoxFindingsJsonl}}" ] && cat "{{dalfoxFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+        if [ -f "{{sqlmapFindingsJsonl}}" ]; then
+          cat "{{sqlmapFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+        fi
+        if [ -f "{{dalfoxFindingsJsonl}}" ]; then
+          cat "{{dalfoxFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+        fi
     on_error:
       - action: continue
 
