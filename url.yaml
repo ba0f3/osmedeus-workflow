@@ -26,6 +26,11 @@ modules:
     depends_on:
       - do-recon-http-fp
 
+  - name: scan-service
+    path: common/scan-service.yaml
+    depends_on:
+      - do-recon-http-fp
+
   - name: do-recon-spider
     path: fragments/do-recon-spider.yaml
     depends_on:

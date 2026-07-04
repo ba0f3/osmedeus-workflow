@@ -103,10 +103,18 @@ modules:
   - name: probe-port
     path: common/probe-port.yaml
     depends_on:
-      - recon-http-fp
+      - enum-ipspace
 
   # ===========================================================================
-  # Phase 10: Thorough Vulnerability Scanning with Vigolium
+  # Phase 10: Network Service Audit
+  # ===========================================================================
+  - name: scan-service
+    path: common/scan-service.yaml
+    depends_on:
+      - enum-ipspace
+
+  # ===========================================================================
+  # Phase 11: Thorough Vulnerability Scanning with Vigolium
   # ===========================================================================
   - name: scan-vuln-thorough
     path: common/scan-vuln-thorough.yaml
@@ -114,7 +122,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 11: Injection Scanning (SQLi / XSS on crawled URLs)
+  # Phase 12: Injection Scanning (SQLi / XSS on crawled URLs)
   # ===========================================================================
   - name: scan-injection
     path: common/scan-injection.yaml

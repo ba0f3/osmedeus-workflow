@@ -1,0 +1,213 @@
+# =============================================================================
+# Module Workflow: Network Service Audit
+# =============================================================================
+
+kind: module
+name: scan-service
+description: Audit exposed non-HTTP services such as SSH, FTP, SMTP, IMAP, SMB, RDP, LDAP, databases, and caches
+tags: service, network, nmap, ftp, ssh, smtp, imap, smb, rdp
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: ipFile
+    default: "{{Output}}/ipspace/ip-{{TargetSpace}}.txt"
+  - name: serviceDir
+    default: "{{Output}}/services"
+  - name: serviceNmapOutput
+    default: "{{Output}}/services/nmap-services-{{TargetSpace}}"
+  - name: serviceJsonlOutput
+    default: "{{Output}}/services/services-{{TargetSpace}}.jsonl"
+  - name: serviceMarkdownReport
+    default: "{{Output}}/services/services-{{TargetSpace}}.md"
+  - name: serviceTargetsDir
+    default: "{{Output}}/services/targets"
+
+  - name: enableServiceAudit
+    type: bool
+    default: true
+  - name: serviceAuditTimeout
+    default: "2h"
+  - name: serviceNmapTiming
+    default: "-T3"
+  - name: serviceNmapPorts
+    default: "21,22,23,25,53,69,110,111,135,137,138,139,143,161,389,443,445,465,500,514,587,636,873,993,995,1433,1521,2049,2375,2376,3306,3389,5432,5601,5672,5900,5985,5986,6379,8009,8089,9200,9300,11211,15672,27017"
+  - name: serviceNmapScripts
+    default: "banner,ftp-anon,smtp-commands,smtp-open-relay,imap-capabilities,pop3-capabilities,ssh2-enum-algos,ssl-cert,ssl-enum-ciphers,smb-protocols,smb-security-mode,rdp-enum-encryption"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - nmap
+    - python3
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: service-audit-jsonl
+    path: "{{serviceJsonlOutput}}"
+    type: jsonl
+    description: Exposed network services and safe script output
+
+  - name: service-audit-report
+    path: "{{serviceMarkdownReport}}"
+    type: md
+    description: Markdown report of exposed network services
+
+  - name: service-targets
+    path: "{{serviceTargetsDir}}"
+    type: folder
+    description: Per-service host:port target lists
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-output-folder
+    type: function
+    log: "Creating service audit output folders"
+    functions:
+      - 'create_folder("{{serviceDir}}")'
+      - 'create_folder("{{serviceTargetsDir}}")'
+      - 'create_folder("{{Output}}/ipspace")'
+
+  - name: prepare-target-service-input
+    type: bash
+    log: "Preparing target host for service audit when no IP file exists"
+    pre_condition: '!file_exists("{{ipFile}}")'
+    commands:
+      - |
+        python3 - "{{Target}}" "{{ipFile}}" <<'PY'
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        raw = sys.argv[1].strip()
+        out = Path(sys.argv[2])
+        parsed = urlparse(raw if "://" in raw else "https://" + raw)
+        host = parsed.hostname or raw
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(host + "\n", encoding="utf-8")
+        print(f"service audit target host -> {host}")
+        PY
+    on_error:
+      - action: continue
+
+  - name: nmap-service-audit
+    type: bash
+    log: "Auditing exposed non-HTTP services with Nmap safe service scripts"
+    pre_condition: '{{enableServiceAudit}} && file_length("{{ipFile}}") > 0'
+    commands:
+      - |
+        echo "[service-audit] $(date -u '+%Y-%m-%dT%H:%M:%SZ') scanning $(wc -l < "{{ipFile}}") IP(s) on ports {{serviceNmapPorts}}"
+        timeout -k 1m {{serviceAuditTimeout}} nmap -Pn -sV --version-light --open {{serviceNmapTiming}} \
+          -p "{{serviceNmapPorts}}" \
+          --script "{{serviceNmapScripts}}" \
+          -iL "{{ipFile}}" \
+          -oA "{{serviceNmapOutput}}" || true
+        echo "[service-audit] $(date -u '+%Y-%m-%dT%H:%M:%SZ') finished service audit; XML: {{serviceNmapOutput}}.xml"
+    on_error:
+      - action: continue
+
+  - name: normalize-service-results
+    type: bash
+    log: "Normalizing service audit results"
+    pre_condition: 'file_exists("{{serviceNmapOutput}}.xml")'
+    commands:
+      - |
+        python3 - "{{serviceNmapOutput}}.xml" "{{serviceJsonlOutput}}" "{{serviceTargetsDir}}" <<'PY'
+        import json
+        import re
+        import sys
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        xml_path = Path(sys.argv[1])
+        jsonl_path = Path(sys.argv[2])
+        targets_dir = Path(sys.argv[3])
+        targets_dir.mkdir(parents=True, exist_ok=True)
+
+        tree = ET.parse(xml_path)
+        rows = []
+        service_targets = {}
+
+        def clean_name(value):
+            value = (value or "unknown").lower()
+            value = re.sub(r"[^a-z0-9_.-]+", "-", value).strip("-")
+            return value or "unknown"
+
+        for host in tree.findall("host"):
+            addr_el = host.find("address")
+            host_ip = addr_el.get("addr") if addr_el is not None else ""
+            hostnames = [
+                h.get("name")
+                for h in host.findall("./hostnames/hostname")
+                if h.get("name")
+            ]
+            for port in host.findall("./ports/port"):
+                state = port.find("state")
+                if state is None or state.get("state") != "open":
+                    continue
+                service = port.find("service")
+                scripts = []
+                for script in port.findall("script"):
+                    scripts.append({
+                        "id": script.get("id"),
+                        "output": script.get("output", "")[:2000],
+                    })
+                port_id = port.get("portid")
+                proto = port.get("protocol", "tcp")
+                service_name = service.get("name") if service is not None else "unknown"
+                product = service.get("product") if service is not None else ""
+                version = service.get("version") if service is not None else ""
+                tunnel = service.get("tunnel") if service is not None else ""
+                row = {
+                    "host": host_ip,
+                    "hostnames": hostnames,
+                    "port": int(port_id),
+                    "protocol": proto,
+                    "service": service_name,
+                    "product": product,
+                    "version": version,
+                    "tunnel": tunnel,
+                    "target": f"{host_ip}:{port_id}",
+                    "scripts": scripts,
+                }
+                rows.append(row)
+                key = clean_name(service_name)
+                service_targets.setdefault(key, set()).add(f"{host_ip}:{port_id}")
+
+        with jsonl_path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        for service_name, values in service_targets.items():
+            (targets_dir / f"{service_name}.txt").write_text(
+                "\n".join(sorted(values)) + "\n",
+                encoding="utf-8",
+            )
+
+        print(f"normalized {len(rows)} service(s) -> {jsonl_path}")
+        PY
+    on_error:
+      - action: continue
+
+  - name: generate-service-report
+    type: function
+    log: "Generating service audit report"
+    pre_condition: 'file_length("{{serviceJsonlOutput}}") > 0'
+    functions:
+      - 'convert_jsonl_to_markdown("{{serviceJsonlOutput}}", "{{serviceMarkdownReport}}")'
+      - 'db_import_port_assets("{{TargetSpace}}", "{{serviceJsonlOutput}}")'
+      - 'send_telegram_file("{{serviceMarkdownReport}}", "Network Service Audit Results")'
+    on_error:
+      - action: continue

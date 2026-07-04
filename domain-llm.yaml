@@ -97,10 +97,18 @@ modules:
   - name: probe-port
     path: common/probe-port.yaml
     depends_on:
-      - recon-http-fp
+      - enum-ipspace
 
   # ===========================================================================
-  # Phase 9: Content Discovery
+  # Phase 9: Network Service Audit
+  # ===========================================================================
+  - name: scan-service
+    path: common/scan-service.yaml
+    depends_on:
+      - enum-ipspace
+
+  # ===========================================================================
+  # Phase 10: Content Discovery
   # ===========================================================================
   - name: scan-content
     path: common/scan-content.yaml
@@ -108,7 +116,7 @@ modules:
       - recon-http-fp
 
   # ===========================================================================
-  # Phase 10: LLM Surface Tightening
+  # Phase 11: LLM Surface Tightening
   # ===========================================================================
   - name: llm-surface-analysis
     path: common/llm-surface-analysis.yaml
@@ -117,9 +125,10 @@ modules:
       - scan-content
       - util-archive
       - probe-port
+      - scan-service
 
   # ===========================================================================
-  # Phase 11: LLM-Guided Surface Scanning
+  # Phase 12: LLM-Guided Surface Scanning
   # ===========================================================================
   - name: llm-guided-surface-scan
     path: common/llm-guided-surface-scan.yaml
@@ -127,7 +136,7 @@ modules:
       - llm-surface-analysis
 
   # ===========================================================================
-  # Phase 12: Baseline Vulnerability Scanning
+  # Phase 13: Baseline Vulnerability Scanning
   # ===========================================================================
   - name: scan-vuln
     path: common/scan-vuln.yaml
@@ -135,7 +144,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 13: LLM-Guided Vulnerability Scanning
+  # Phase 14: LLM-Guided Vulnerability Scanning
   # ===========================================================================
   - name: llm-guided-vuln-scan
     path: common/llm-guided-vuln-scan.yaml
@@ -143,7 +152,7 @@ modules:
       - scan-vuln
 
   # ===========================================================================
-  # Phase 14: Thorough Vulnerability Scanning with Vigolium
+  # Phase 15: Thorough Vulnerability Scanning with Vigolium
   # ===========================================================================
   - name: scan-vuln-thorough
     path: common/scan-vuln-thorough.yaml
@@ -151,7 +160,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 15: Injection Scanning on Tightened Crawled URLs
+  # Phase 16: Injection Scanning on Tightened Crawled URLs
   # ===========================================================================
   - name: scan-injection
     path: common/scan-injection.yaml
@@ -160,7 +169,7 @@ modules:
       - scan-content
 
   # ===========================================================================
-  # Phase 16: LLM-Guided Injection Scanning
+  # Phase 17: LLM-Guided Injection Scanning
   # ===========================================================================
   - name: llm-guided-injection
     path: common/llm-guided-injection.yaml
@@ -168,7 +177,7 @@ modules:
       - scan-injection
 
   # ===========================================================================
-  # Phase 17: Autonomous Tuning Controller
+  # Phase 18: Autonomous Tuning Controller
   # ===========================================================================
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml

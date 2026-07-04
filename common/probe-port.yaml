@@ -12,7 +12,7 @@ tags: portscan, rustscan, network, nmap
 # -----------------------------------------------------------------------------
 params:
   - name: ipFile
-    default: "{{Output}}/portscan/ip-file-{{TargetSpace}}.txt"
+    default: "{{Output}}/ipspace/ip-{{TargetSpace}}.txt"
 
   # pair of host:port
   - name: openPortsFile

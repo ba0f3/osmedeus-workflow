@@ -48,6 +48,8 @@ params:
     default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
   - name: llmInjectionFindingsJsonl
     default: "{{Output}}/vulnscan/llm-injection/injection-findings-{{TargetSpace}}.jsonl"
+  - name: serviceJsonlOutput
+    default: "{{Output}}/services/services-{{TargetSpace}}.jsonl"
 
   - name: enableAutonomousLLM
     type: bool
@@ -107,7 +109,7 @@ steps:
         python3 - "{{autonomousMetricsFile}}" "{{autonomousContextFile}}" "{{Target}}" "{{autonomousMaxRounds}}" "{{autonomousMinNewUrls}}" "{{autonomousMaxExtraMinutes}}" \
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" \
           "{{llmSurfaceCandidatesFile}}" "{{llmSurfaceLiveFile}}" "{{llmSurfaceLinksFile}}" "{{llmParameterCandidatesFile}}" \
-          "{{nucleiOutputJsonl}}" "{{llmNucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{llmInjectionFindingsJsonl}}" <<'PY'
+          "{{nucleiOutputJsonl}}" "{{llmNucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{llmInjectionFindingsJsonl}}" "{{serviceJsonlOutput}}" <<'PY'
         import json
         import sys
         from pathlib import Path
@@ -133,6 +135,7 @@ steps:
             "llm_nuclei_findings",
             "injection_findings",
             "llm_injection_findings",
+            "network_services",
         ]
         paths = [Path(p) for p in sys.argv[7:]]
 

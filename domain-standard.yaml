@@ -107,10 +107,18 @@ modules:
   - name: probe-port
     path: common/probe-port.yaml
     depends_on:
-      - recon-http-fp
+      - enum-ipspace
 
   # ===========================================================================
-  # Phase 10: Content Discovery
+  # Phase 10: Network Service Audit
+  # ===========================================================================
+  - name: scan-service
+    path: common/scan-service.yaml
+    depends_on:
+      - enum-ipspace
+
+  # ===========================================================================
+  # Phase 11: Content Discovery
   # ===========================================================================
   - name: scan-content
     path: common/scan-content.yaml

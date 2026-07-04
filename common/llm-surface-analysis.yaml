@@ -27,6 +27,8 @@ params:
     default: "{{Output}}/vulnscan/nuclei-jsonl-{{TargetSpace}}.txt"
   - name: injectionFindingsJsonl
     default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
+  - name: serviceJsonlOutput
+    default: "{{Output}}/services/services-{{TargetSpace}}.jsonl"
 
   - name: llmDir
     default: "{{Output}}/llm"
@@ -98,7 +100,7 @@ steps:
         python3 - "{{llmDir}}/context-{{TargetSpace}}.md" "{{llmArtifactLineLimit}}" \
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{httpInterestingJsonFile}}" \
           "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" "{{contentDiscoverUrlsFile}}" \
-          "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" <<'PY'
+          "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{serviceJsonlOutput}}" <<'PY'
         import sys
         from pathlib import Path
 

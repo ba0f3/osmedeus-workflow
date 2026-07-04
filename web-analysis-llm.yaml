@@ -33,11 +33,17 @@ modules:
     depends_on:
       - do-recon-http-fp
 
+  - name: scan-service
+    path: common/scan-service.yaml
+    depends_on:
+      - do-recon-http-fp
+
   - name: llm-surface-analysis
     path: common/llm-surface-analysis.yaml
     depends_on:
       - do-recon-spider
       - do-scan-content
+      - scan-service
 
   - name: llm-guided-surface-scan
     path: common/llm-guided-surface-scan.yaml

@@ -109,6 +109,7 @@ The workflow follows a phased approach to reconnaissance:
 | `util-archive.yaml` | Archive/wayback machine data collection |
 | `enum-ipspace.yaml` | IP space enumeration |
 | `probe-port.yaml` | Port scanning |
+| `scan-service.yaml` | Network service audit for SSH, FTP, SMTP, IMAP, SMB, RDP, LDAP, databases, and caches |
 | `scan-vuln.yaml` | Vulnerability scanning |
 | `scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scanning |
 | `scan-content.yaml` | Directory and content bruteforcing |
