@@ -1,0 +1,115 @@
+# =============================================================================
+# Module Workflow: LLM-Guided Surface Scan
+# =============================================================================
+
+kind: module
+name: llm-guided-surface-scan
+description: Probe and crawl LLM-suggested URLs, then feed new parameterized links into follow-up testing
+tags: llm, recon, spider, surface-expansion
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: llmSurfaceCandidatesFile
+    default: "{{Output}}/llm/surface-candidates-{{TargetSpace}}.txt"
+  - name: llmParameterCandidatesFile
+    default: "{{Output}}/llm/parameter-candidates-{{TargetSpace}}.txt"
+  - name: llmSurfaceHttpJsonl
+    default: "{{Output}}/llm/surface-http-{{TargetSpace}}.jsonl"
+  - name: llmSurfaceLiveFile
+    default: "{{Output}}/llm/surface-live-{{TargetSpace}}.txt"
+  - name: llmSurfaceLinksFile
+    default: "{{Output}}/llm/surface-links-{{TargetSpace}}.txt"
+  - name: linkFile
+    default: "{{Output}}/links/links-{{TargetSpace}}.txt"
+  - name: httpThreads
+    default: "{{ threads * 4 }}"
+  - name: httpTimeout
+    default: "15"
+  - name: spiderThreads
+    default: "{{ threads }}"
+  - name: spiderPrallel
+    default: "{{ threads / 2 }}"
+  - name: spiderTimeout
+    default: "45m"
+  - name: crawlingTime
+    default: "10"
+  - name: defaultUA
+    default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - pd-httpx
+    - katana
+    - jq
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: llm-surface-live
+    path: "{{llmSurfaceLiveFile}}"
+    type: text
+    description: Live URLs discovered from LLM-suggested surfaces
+
+  - name: llm-surface-links
+    path: "{{llmSurfaceLinksFile}}"
+    type: text
+    description: Crawled links from LLM-suggested surfaces
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-output-folder
+    type: function
+    log: "Creating LLM surface scan output folder"
+    functions:
+      - 'create_folder("{{Output}}/llm")'
+      - 'create_folder("{{Output}}/links")'
+
+  - name: probe-llm-surface-candidates
+    type: bash
+    log: "Probing LLM-suggested surface candidates"
+    pre_condition: 'file_length("{{llmSurfaceCandidatesFile}}") > 0'
+    commands:
+      - 'cat {{llmSurfaceCandidatesFile}} | pd-httpx -H "{{defaultUA}}" -timeout {{httpTimeout}} -t {{httpThreads}} -no-fallback -no-color -silent -json -title -favicon -tech-detect -status-code -follow-host-redirects -include-chain >> {{llmSurfaceHttpJsonl}}'
+      - "cat {{llmSurfaceHttpJsonl}} | jq -r '.url // empty' | sort -u > {{llmSurfaceLiveFile}}"
+    on_error:
+      - action: continue
+
+  - name: crawl-llm-live-surfaces
+    type: foreach
+    log: "Crawling live LLM-suggested surfaces"
+    pre_condition: 'file_length("{{llmSurfaceLiveFile}}") > 0'
+    input: "{{llmSurfaceLiveFile}}"
+    variable: line
+    threads: "{{spiderPrallel}}"
+    step:
+      name: katana-llm-surface
+      type: bash
+      command: "timeout -k 1m {{spiderTimeout}} katana -silent -c {{spiderThreads}} -jc -ct {{crawlingTime}} -u [[line]] | sort -u >> {{llmSurfaceLinksFile}}"
+      on_error:
+        - action: continue
+
+  - name: merge-llm-surface-links
+    type: function
+    log: "Merging LLM surface links into main link and parameter candidate files"
+    pre_condition: 'file_exists("{{llmSurfaceLinksFile}}")'
+    functions:
+      - sort_unix("{{llmSurfaceLinksFile}}")
+      - exec_cmd("cat {{llmSurfaceLinksFile}} >> {{linkFile}}")
+      - sort_unix("{{linkFile}}")
+      - exec_cmd("grep '?' {{llmSurfaceLinksFile}} | grep -Fi '{{TargetSpace}}' >> {{llmParameterCandidatesFile}} || true")
+      - sort_unix("{{llmParameterCandidatesFile}}")
+    on_error:
+      - action: continue

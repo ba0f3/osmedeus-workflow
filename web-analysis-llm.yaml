@@ -1,0 +1,78 @@
+kind: flow
+name: web-analysis-llm
+description: LLM-guided single URL analysis - collect artifacts, tighten surfaces, then scan
+tags: recon, url, web, llm, agent
+help:
+  example_targets: ['https://example.com', 'https://httpbin.org', 'example.com']
+  usage: osmedeus run -f web-analysis-llm -t https://example.com
+
+params:
+  - name: enableStoreHTTPResponse
+    default: true
+  - name: enableLLMRecon
+    type: bool
+    default: true
+
+dependencies:
+  variables:
+    - name: Target
+      type: url,domain
+      required: true
+
+modules:
+  - name: do-recon-http-fp
+    path: fragments/do-recon-http-fp.yaml
+
+  - name: do-recon-spider
+    path: fragments/do-recon-spider.yaml
+    depends_on:
+      - do-recon-http-fp
+
+  - name: do-scan-content
+    path: fragments/do-scan-content.yaml
+    depends_on:
+      - do-recon-http-fp
+
+  - name: llm-surface-analysis
+    path: common/llm-surface-analysis.yaml
+    depends_on:
+      - do-recon-spider
+      - do-scan-content
+
+  - name: llm-guided-surface-scan
+    path: common/llm-guided-surface-scan.yaml
+    depends_on:
+      - llm-surface-analysis
+
+  - name: do-scan-vuln
+    path: fragments/do-scan-vuln.yaml
+    depends_on:
+      - llm-guided-surface-scan
+
+  - name: llm-guided-vuln-scan
+    path: common/llm-guided-vuln-scan.yaml
+    depends_on:
+      - do-scan-vuln
+
+  - name: do-scan-vuln-thorough
+    path: fragments/do-scan-vuln-thorough.yaml
+    depends_on:
+      - llm-guided-surface-scan
+
+  - name: do-scan-injection
+    path: fragments/do-scan-injection.yaml
+    depends_on:
+      - llm-guided-surface-scan
+      - do-scan-content
+
+  - name: llm-guided-injection
+    path: common/llm-guided-injection.yaml
+    depends_on:
+      - do-scan-injection
+
+  - name: llm-autonomous-controller
+    path: common/llm-autonomous-controller.yaml
+    depends_on:
+      - llm-guided-vuln-scan
+      - do-scan-vuln-thorough
+      - llm-guided-injection

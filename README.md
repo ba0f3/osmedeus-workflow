@@ -91,6 +91,8 @@ The workflow follows a phased approach to reconnaissance:
 | `cidr-extensive.yaml` | Extended CIDR reconnaissance with additional phases |
 | `url.yaml` | URL-based reconnaissance workflow |
 | `web-analysis.yaml` | Web application analysis workflow |
+| `domain-llm.yaml` | LLM-guided deep domain reconnaissance with agent surface expansion |
+| `web-analysis-llm.yaml` | LLM-guided single URL analysis with smarter surface and parameter discovery |
 | `repo.yaml` | Source repository scanning workflow |
 | `sast.yaml` | Static application security testing workflow |
 | `ad-standard.yaml` | Standard Active Directory assessment — domain discovery, LDAP/SMB enum, Kerberos attacks |
@@ -111,6 +113,11 @@ The workflow follows a phased approach to reconnaissance:
 | `scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scanning |
 | `scan-content.yaml` | Directory and content bruteforcing |
 | `recon-spider.yaml` | Web spidering/crawling |
+| `llm-surface-analysis.yaml` | Agent analysis of recon artifacts to infer deeper routes, APIs, and parameters |
+| `llm-guided-surface-scan.yaml` | Probes and crawls LLM-suggested surfaces |
+| `llm-guided-vuln-scan.yaml` | Runs Nuclei against LLM-tightened live surfaces |
+| `llm-guided-injection.yaml` | Tests LLM-suggested parameterized URLs with sqlmap and Dalfox |
+| `llm-autonomous-controller.yaml` | Bounded agent controller that tunes params and reruns allowlisted modules until returns flatten |
 | `ad-enum.yaml` | Active Directory discovery — domain info, users, groups, computers, password policy |
 | `ad-kerberos.yaml` | Kerberos attacks — AS-REP roasting, Kerberoasting, user enumeration |
 | `ad-ldap.yaml` | LDAP interrogation — anonymous bind, domain dump, signing checks |

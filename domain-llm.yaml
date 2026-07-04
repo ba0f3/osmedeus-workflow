@@ -1,0 +1,178 @@
+kind: flow
+name: domain-llm
+description: LLM-guided deep domain recon - collect artifacts, tighten surfaces, then scan
+tags: recon, domain, extensive, llm, agent
+help:
+  example_targets: ['example.com', 'hackerone.com']
+  usage: osmedeus run -f domain-llm -t example.com
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: enableDnsBruteFocing
+    default: true
+  - name: enablePermutation
+    default: true
+  - name: enableStoreHTTPResponse
+    default: true
+  - name: commonHttpsPort
+    default: "1-65535"
+  - name: commonHttpPorts
+    default: "1-65535"
+  - name: enableLLMRecon
+    type: bool
+    default: true
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  variables:
+    - name: Target
+      type: domain
+      required: true
+
+# -----------------------------------------------------------------------------
+# MODULES SECTION
+# -----------------------------------------------------------------------------
+modules:
+  # ===========================================================================
+  # Phase 1: Subdomain Enumeration
+  # ===========================================================================
+  - name: enum-subdomain
+    path: common/enum-subdomain.yaml
+
+  # ===========================================================================
+  # Phase 2: Probing
+  # ===========================================================================
+  - name: probe-dns
+    path: common/probe-dns.yaml
+    depends_on:
+      - enum-subdomain
+
+  # ===========================================================================
+  # Phase 3: Fingerprinting
+  # ===========================================================================
+  - name: recon-http-fp
+    path: common/recon-http-fp.yaml
+    depends_on:
+      - probe-dns
+
+  # ===========================================================================
+  # Phase 4: Screenshots
+  # ===========================================================================
+  - name: recon-screenshot
+    path: common/recon-screenshot.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 5: Spidering
+  # ===========================================================================
+  - name: recon-spider
+    path: common/recon-spider.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 6: Archiving
+  # ===========================================================================
+  - name: util-archive
+    path: common/util-archive.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 7: IP Space Enumeration
+  # ===========================================================================
+  - name: enum-ipspace
+    path: common/enum-ipspace.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 8: Port Scanning
+  # ===========================================================================
+  - name: probe-port
+    path: common/probe-port.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 9: Content Discovery
+  # ===========================================================================
+  - name: scan-content
+    path: common/scan-content.yaml
+    depends_on:
+      - recon-http-fp
+
+  # ===========================================================================
+  # Phase 10: LLM Surface Tightening
+  # ===========================================================================
+  - name: llm-surface-analysis
+    path: common/llm-surface-analysis.yaml
+    depends_on:
+      - recon-spider
+      - scan-content
+      - util-archive
+      - probe-port
+
+  # ===========================================================================
+  # Phase 11: LLM-Guided Surface Scanning
+  # ===========================================================================
+  - name: llm-guided-surface-scan
+    path: common/llm-guided-surface-scan.yaml
+    depends_on:
+      - llm-surface-analysis
+
+  # ===========================================================================
+  # Phase 12: Baseline Vulnerability Scanning
+  # ===========================================================================
+  - name: scan-vuln
+    path: common/scan-vuln.yaml
+    depends_on:
+      - llm-guided-surface-scan
+
+  # ===========================================================================
+  # Phase 13: LLM-Guided Vulnerability Scanning
+  # ===========================================================================
+  - name: llm-guided-vuln-scan
+    path: common/llm-guided-vuln-scan.yaml
+    depends_on:
+      - scan-vuln
+
+  # ===========================================================================
+  # Phase 14: Thorough Vulnerability Scanning with Vigolium
+  # ===========================================================================
+  - name: scan-vuln-thorough
+    path: common/scan-vuln-thorough.yaml
+    depends_on:
+      - llm-guided-surface-scan
+
+  # ===========================================================================
+  # Phase 15: Injection Scanning on Tightened Crawled URLs
+  # ===========================================================================
+  - name: scan-injection
+    path: common/scan-injection.yaml
+    depends_on:
+      - llm-guided-surface-scan
+      - scan-content
+
+  # ===========================================================================
+  # Phase 16: LLM-Guided Injection Scanning
+  # ===========================================================================
+  - name: llm-guided-injection
+    path: common/llm-guided-injection.yaml
+    depends_on:
+      - scan-injection
+
+  # ===========================================================================
+  # Phase 17: Autonomous Tuning Controller
+  # ===========================================================================
+  - name: llm-autonomous-controller
+    path: common/llm-autonomous-controller.yaml
+    depends_on:
+      - llm-guided-vuln-scan
+      - scan-vuln-thorough
+      - llm-guided-injection

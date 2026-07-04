@@ -1,0 +1,235 @@
+# =============================================================================
+# Module Workflow: LLM Surface Analysis
+# =============================================================================
+
+kind: module
+name: llm-surface-analysis
+description: Use an LLM agent to infer deeper routes, parameters, and follow-up surfaces from recon artifacts
+tags: llm, agent, recon, surface-analysis
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: httpFile
+    default: "{{Output}}/probing/http-{{TargetSpace}}.txt"
+  - name: httpFingerprintJsonFile
+    default: "{{Output}}/fingerprint/http-fingerprint-{{TargetSpace}}.jsonl"
+  - name: httpInterestingJsonFile
+    default: "{{Output}}/fingerprint/http-interesting-{{TargetSpace}}.jsonl"
+  - name: linkFile
+    default: "{{Output}}/links/links-{{TargetSpace}}.txt"
+  - name: contentDiscoveryJsonlFile
+    default: "{{Output}}/content-discovery/deparos-records-{{TargetSpace}}.jsonl"
+  - name: contentDiscoverUrlsFile
+    default: "{{Output}}/content-discovery/content-discovery-url-{{TargetSpace}}.txt"
+  - name: nucleiOutputJsonl
+    default: "{{Output}}/vulnscan/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: injectionFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
+
+  - name: llmDir
+    default: "{{Output}}/llm"
+  - name: llmAnalysisReport
+    default: "{{Output}}/llm/surface-analysis-{{TargetSpace}}.md"
+  - name: llmSurfaceCandidatesFile
+    default: "{{Output}}/llm/surface-candidates-{{TargetSpace}}.txt"
+  - name: llmRouteCandidatesFile
+    default: "{{Output}}/llm/route-candidates-{{TargetSpace}}.txt"
+  - name: llmParameterCandidatesFile
+    default: "{{Output}}/llm/parameter-candidates-{{TargetSpace}}.txt"
+  - name: llmNucleiFollowupFile
+    default: "{{Output}}/llm/nuclei-followup-{{TargetSpace}}.md"
+  - name: llmAgentHistoryFile
+    default: "{{Output}}/llm/agent-history-{{TargetSpace}}.json"
+
+  - name: enableLLMRecon
+    type: bool
+    default: true
+  - name: llmArtifactLineLimit
+    default: "3000"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - python3
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: llm-surface-analysis
+    path: "{{llmAnalysisReport}}"
+    type: md
+    description: LLM analysis of likely deeper attack surface
+
+  - name: llm-surface-candidates
+    path: "{{llmSurfaceCandidatesFile}}"
+    type: text
+    description: LLM-suggested URLs and hosts for follow-up probing
+
+  - name: llm-parameter-candidates
+    path: "{{llmParameterCandidatesFile}}"
+    type: text
+    description: LLM-suggested parameterized URLs for injection testing
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-output-folder
+    type: function
+    log: "Creating LLM analysis output folder"
+    functions:
+      - 'create_folder("{{llmDir}}")'
+
+  - name: prepare-agent-context
+    type: bash
+    log: "Preparing bounded artifact context for LLM analysis"
+    commands:
+      - |
+        python3 - "{{llmDir}}/context-{{TargetSpace}}.md" "{{llmArtifactLineLimit}}" \
+          "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{httpInterestingJsonFile}}" \
+          "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" "{{contentDiscoverUrlsFile}}" \
+          "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" <<'PY'
+        import sys
+        from pathlib import Path
+
+        out = Path(sys.argv[1])
+        limit = int(sys.argv[2])
+        files = [Path(p) for p in sys.argv[3:]]
+        sections = []
+
+        for path in files:
+            sections.append(f"\n## {path.name}\n")
+            if not path.exists():
+                sections.append("_missing_\n")
+                continue
+            count = 0
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    sections.append(line[:4000] + "\n")
+                    count += 1
+                    if count >= limit:
+                        sections.append(f"_truncated after {limit} non-empty lines_\n")
+                        break
+
+        out.write_text("".join(sections), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: analyze-surfaces-with-agent
+    type: agent
+    log: "Using LLM agent to infer deeper surfaces and smarter follow-up tests"
+    pre_condition: '"{{enableLLMRecon}}" == "true" && file_exists("{{llmDir}}/context-{{TargetSpace}}.md")'
+    system_prompt: |
+      You are an authorized web reconnaissance analyst inside an Osmedeus workflow.
+      Work only from the artifacts under {{Output}} and the in-scope target {{Target}}.
+      Do not provide stealth, persistence, credential theft, destructive exploitation, or out-of-scope instructions.
+      Your job is to infer likely missed routes, API surfaces, parameterized URLs, and safe follow-up tests.
+    query: |
+      Analyze {{llmDir}}/context-{{TargetSpace}}.md and write these exact files:
+
+      1. {{llmAnalysisReport}}
+         Markdown with:
+         - strongest technology clues
+         - likely hidden app areas and route families
+         - missing spider/content-discovery coverage
+         - prioritized safe follow-up checks
+
+      2. {{llmSurfaceCandidatesFile}}
+         Plain text, one absolute http/https URL per line. Include likely admin/API/static/upload/search/auth paths inferred from technologies, titles, observed links, status codes, and content types.
+
+      3. {{llmRouteCandidatesFile}}
+         Plain text, one route or path per line. Use this for wordlist expansion. Keep entries path-like, for example /api/v1/users.
+
+      4. {{llmParameterCandidatesFile}}
+         Plain text, one absolute http/https URL containing a query string per line. Prefer URLs that can be safely tested by sqlmap/dalfox. Infer common parameters from observed routes, forms, API names, and technologies.
+
+      5. {{llmNucleiFollowupFile}}
+         Markdown with nuclei template tags or categories worth re-running and the evidence for each suggestion.
+
+      Keep every suggested URL in scope for {{Target}}. Do not invent unrelated domains.
+    max_iterations: 12
+    parallel_tool_calls: true
+    agent_tools:
+      - preset: read_file
+      - preset: file_exists
+      - preset: file_length
+      - preset: grep_regex
+      - preset: jq
+      - preset: save_content
+    memory:
+      max_messages: 30
+      summarize_on_truncate: true
+      persist_path: "{{llmAgentHistoryFile}}"
+    llm_config:
+      max_tokens: 6000
+      temperature: 0.2
+      timeout: "5m"
+      max_retries: 2
+    on_error:
+      - action: continue
+
+  - name: normalize-agent-candidates
+    type: bash
+    log: "Normalizing LLM candidate files"
+    commands:
+      - |
+        python3 - "{{Target}}" "{{llmSurfaceCandidatesFile}}" "{{llmRouteCandidatesFile}}" "{{llmParameterCandidatesFile}}" <<'PY'
+        import re
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlsplit
+
+        raw_target = sys.argv[1].lower().strip()
+        parsed_target = urlsplit(raw_target if "://" in raw_target else "https://" + raw_target)
+        target = parsed_target.hostname or raw_target
+        paths = [Path(p) for p in sys.argv[2:]]
+
+        def in_scope(url: str) -> bool:
+            try:
+                parsed = urlsplit(url)
+            except ValueError:
+                return False
+            host = (parsed.hostname or "").lower()
+            if not parsed.scheme.startswith("http") or not host:
+                return False
+            return host == target or host.endswith("." + target) or target in host
+
+        for path in paths:
+            values = []
+            seen = set()
+            if path.exists():
+                for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    item = raw.strip().strip("-*`'\" ")
+                    if not item:
+                        continue
+                    match = re.search(r"https?://[^\s<>()\"']+", item)
+                    if match:
+                        item = match.group(0).rstrip(".,;")
+                        if not in_scope(item):
+                            continue
+                    elif path.name.startswith("route-candidates"):
+                        if not item.startswith("/"):
+                            item = "/" + item
+                    else:
+                        continue
+                    if item not in seen:
+                        seen.add(item)
+                        values.append(item)
+            path.write_text("\n".join(values) + ("\n" if values else ""), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue

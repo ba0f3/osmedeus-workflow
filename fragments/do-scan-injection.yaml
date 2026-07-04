@@ -310,12 +310,13 @@ steps:
     pre_condition: '{{enableDalfox}} && file_length("{{dalfoxInputFile}}") > 0'
     commands:
       - |
+        echo "[dalfox] $(date -u '+%Y-%m-%dT%H:%M:%SZ') starting XSS scan with $(wc -l < "{{dalfoxInputFile}}") URL(s)"
         dalfox file {{dalfoxInputFile}} \
-          --silence \
           --worker {{injectionThreads}} \
           --user-agent "{{defaultUA}}" \
           --format jsonl \
-          -o {{dalfoxRawJsonl}} || true
+          -o {{dalfoxRawJsonl}} 2>&1 | tee "{{injectionDir}}/dalfox-console.log" || true
+        echo "[dalfox] $(date -u '+%Y-%m-%dT%H:%M:%SZ') finished XSS scan; raw output: {{dalfoxRawJsonl}}"
       - |
         if [ -f "{{dalfoxRawJsonl}}" ]; then
           cp "{{dalfoxRawJsonl}}" "{{injectionDir}}/dalfox-results.txt"

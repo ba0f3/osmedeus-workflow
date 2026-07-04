@@ -8,22 +8,40 @@ BASE ?= $(HOME)/osmedeus-base
 WORKFLOWS := $(BASE)/workflows
 SRC := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 
+# Remote deploy: make deploy SERVER=remote
+SERVER ?=
+REMOTE_WORKFLOWS ?= /root/osmedeus-base/workflows
+RSYNC_EXCLUDES := \
+	--exclude='.git' \
+	--exclude='.github' \
+	--exclude='.cursor' \
+	--exclude='.gortex' \
+	--exclude='.agents' \
+	--exclude='.codex' \
+	--exclude='.gitignore' \
+	--exclude='Makefile' \
+	--exclude='docs'
+
 YELLOW := \033[1;33m
 GREEN  := \033[1;32m
 CYAN   := \033[1;36m
 RED    := \033[1;31m
 NC     := \033[0m
 
-.PHONY: help install install-common install-fragments install-events install-flows lint diff status
+.PHONY: help install install-common install-fragments install-events install-flows deploy lint diff status
 
 help:
 	@echo ""
 	@echo "$(CYAN)Osmedeus Workflow Development Makefile$(NC)"
 	@echo ""
-	@echo "  $(GREEN)make install$(NC)        — Copy all workflows to $(WORKFLOWS)"
-	@echo "  $(GREEN)make lint$(NC)          — Run osmedeus workflow lint on all YAML files"
-	@echo "  $(GREEN)make diff$(NC)          — Show differences between local and installed"
-	@echo "  $(GREEN)make status$(NC)        — Show deployment status (missing/newer files)"
+	@echo "  $(GREEN)make install$(NC)                 — Copy all workflows to $(WORKFLOWS)"
+	@echo "  $(GREEN)make deploy SERVER=<host>$(NC)    — Rsync all workflows to remote host"
+	@echo "  $(GREEN)make lint$(NC)                   — Run osmedeus workflow lint on all YAML files"
+	@echo "  $(GREEN)make diff$(NC)                   — Show differences between local and installed"
+	@echo "  $(GREEN)make status$(NC)                 — Show deployment status (missing/newer files)"
+	@echo ""
+	@echo "  Remote path default: $(REMOTE_WORKFLOWS)"
+	@echo "  Override with: $(GREEN)make deploy SERVER=secops-02 REMOTE_WORKFLOWS=/path$(NC)"
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -55,6 +73,21 @@ install-flows:
 	@echo "$(CYAN)  *.md → $(WORKFLOWS)/$(NC)"
 	@cp $(SRC)README.md $(WORKFLOWS)/
 	@cp $(SRC)AGENTS.md $(WORKFLOWS)/
+
+# ---------------------------------------------------------------------------
+# Deploy (remote)
+# ---------------------------------------------------------------------------
+
+deploy:
+	@if [ -z "$(SERVER)" ]; then \
+		echo "$(RED)✘ SERVER is required$(NC)"; \
+		echo "  Usage: make deploy SERVER=secops-02"; \
+		exit 1; \
+	fi
+	@echo "$(CYAN)Deploying workflows → $(SERVER):$(REMOTE_WORKFLOWS)/$(NC)"
+	@rsync -avz $(RSYNC_EXCLUDES) "$(SRC)" "$(SERVER):$(REMOTE_WORKFLOWS)/"
+	@echo ""
+	@echo "$(GREEN)✔ Deployed to $(SERVER):$(REMOTE_WORKFLOWS)/$(NC)"
 
 # ---------------------------------------------------------------------------
 # Lint

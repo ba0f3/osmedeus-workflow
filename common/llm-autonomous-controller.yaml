@@ -1,0 +1,285 @@
+# =============================================================================
+# Module Workflow: LLM Autonomous Controller
+# =============================================================================
+
+kind: module
+name: llm-autonomous-controller
+description: Bounded agent controller that tunes params, reruns allowlisted modules, and stops on diminishing returns
+tags: llm, agent, autonomous, tuning, controller
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: autonomousDir
+    default: "{{Output}}/llm/autonomous"
+  - name: autonomousMetricsFile
+    default: "{{Output}}/llm/autonomous/metrics-{{TargetSpace}}.json"
+  - name: autonomousContextFile
+    default: "{{Output}}/llm/autonomous/context-{{TargetSpace}}.md"
+  - name: autonomousParamsFile
+    default: "{{Output}}/llm/autonomous/params-{{TargetSpace}}.yaml"
+  - name: autonomousReportFile
+    default: "{{Output}}/llm/autonomous/report-{{TargetSpace}}.md"
+  - name: autonomousAgentHistoryFile
+    default: "{{Output}}/llm/autonomous/agent-history-{{TargetSpace}}.json"
+
+  - name: httpFile
+    default: "{{Output}}/probing/http-{{TargetSpace}}.txt"
+  - name: httpFingerprintJsonFile
+    default: "{{Output}}/fingerprint/http-fingerprint-{{TargetSpace}}.jsonl"
+  - name: linkFile
+    default: "{{Output}}/links/links-{{TargetSpace}}.txt"
+  - name: contentDiscoveryJsonlFile
+    default: "{{Output}}/content-discovery/deparos-records-{{TargetSpace}}.jsonl"
+  - name: llmSurfaceCandidatesFile
+    default: "{{Output}}/llm/surface-candidates-{{TargetSpace}}.txt"
+  - name: llmSurfaceLiveFile
+    default: "{{Output}}/llm/surface-live-{{TargetSpace}}.txt"
+  - name: llmSurfaceLinksFile
+    default: "{{Output}}/llm/surface-links-{{TargetSpace}}.txt"
+  - name: llmParameterCandidatesFile
+    default: "{{Output}}/llm/parameter-candidates-{{TargetSpace}}.txt"
+  - name: nucleiOutputJsonl
+    default: "{{Output}}/vulnscan/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: llmNucleiOutputJsonl
+    default: "{{Output}}/vulnscan/llm/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: injectionFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
+  - name: llmInjectionFindingsJsonl
+    default: "{{Output}}/vulnscan/llm-injection/injection-findings-{{TargetSpace}}.jsonl"
+
+  - name: enableAutonomousLLM
+    type: bool
+    default: false
+  - name: autonomousMaxRounds
+    default: "2"
+  - name: autonomousMinNewUrls
+    default: "10"
+  - name: autonomousMaxExtraMinutes
+    default: "180"
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - python3
+
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: autonomous-controller-report
+    path: "{{autonomousReportFile}}"
+    type: md
+    description: Agent decisions, parameter changes, reruns, and stop reason
+
+  - name: autonomous-controller-params
+    path: "{{autonomousParamsFile}}"
+    type: yaml
+    description: Last autonomous parameter set chosen by the agent
+
+  - name: autonomous-controller-metrics
+    path: "{{autonomousMetricsFile}}"
+    type: json
+    description: Coverage and finding metrics used by the autonomous controller
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-output-folder
+    type: function
+    log: "Creating autonomous controller output folder"
+    functions:
+      - 'create_folder("{{autonomousDir}}")'
+
+  - name: build-autonomous-metrics
+    type: bash
+    log: "Building autonomous controller metrics"
+    commands:
+      - |
+        python3 - "{{autonomousMetricsFile}}" "{{autonomousContextFile}}" "{{Target}}" "{{autonomousMaxRounds}}" "{{autonomousMinNewUrls}}" "{{autonomousMaxExtraMinutes}}" \
+          "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" \
+          "{{llmSurfaceCandidatesFile}}" "{{llmSurfaceLiveFile}}" "{{llmSurfaceLinksFile}}" "{{llmParameterCandidatesFile}}" \
+          "{{nucleiOutputJsonl}}" "{{llmNucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{llmInjectionFindingsJsonl}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        metrics_path = Path(sys.argv[1])
+        context_path = Path(sys.argv[2])
+        target = sys.argv[3]
+        budgets = {
+            "max_rounds": int(sys.argv[4]),
+            "min_new_urls_per_round": int(sys.argv[5]),
+            "max_extra_minutes": int(sys.argv[6]),
+        }
+        labels = [
+            "http_roots",
+            "http_fingerprints",
+            "links",
+            "content_records",
+            "llm_surface_candidates",
+            "llm_live_surfaces",
+            "llm_surface_links",
+            "llm_parameter_candidates",
+            "nuclei_findings",
+            "llm_nuclei_findings",
+            "injection_findings",
+            "llm_injection_findings",
+        ]
+        paths = [Path(p) for p in sys.argv[7:]]
+
+        def count_lines(path):
+            if not path.exists():
+                return 0
+            count = 0
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.strip():
+                        count += 1
+            return count
+
+        def sample_lines(path, limit=12):
+            if not path.exists():
+                return []
+            out = []
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if line:
+                        out.append(line[:600])
+                    if len(out) >= limit:
+                        break
+            return out
+
+        files = {}
+        for label, path in zip(labels, paths):
+            files[label] = {
+                "path": str(path),
+                "lines": count_lines(path),
+                "sample": sample_lines(path),
+            }
+
+        metrics = {
+            "target": target,
+            "budgets": budgets,
+            "files": files,
+            "derived": {
+                "has_parameter_candidates": files["llm_parameter_candidates"]["lines"] > 0,
+                "has_llm_live_surfaces": files["llm_live_surfaces"]["lines"] > 0,
+                "has_findings": (
+                    files["nuclei_findings"]["lines"]
+                    + files["llm_nuclei_findings"]["lines"]
+                    + files["injection_findings"]["lines"]
+                    + files["llm_injection_findings"]["lines"]
+                ) > 0,
+            },
+        }
+
+        metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+        lines = [
+            f"# Autonomous controller context for {target}",
+            "",
+            "## Budgets",
+            json.dumps(budgets, indent=2),
+            "",
+            "## Artifact metrics",
+        ]
+        for label, row in files.items():
+            lines.append(f"- {label}: {row['lines']} lines at `{row['path']}`")
+        lines.append("")
+        lines.append("## Samples")
+        for label, row in files.items():
+            if not row["sample"]:
+                continue
+            lines.append(f"### {label}")
+            lines.extend(row["sample"])
+            lines.append("")
+        context_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: autonomous-agent-control-loop
+    type: agent
+    log: "Running bounded autonomous LLM controller"
+    pre_condition: '"{{enableAutonomousLLM}}" == "true" && file_exists("{{autonomousContextFile}}") && (file_length("{{llmSurfaceLiveFile}}") > 0 || file_length("{{llmParameterCandidatesFile}}") > 0 || file_length("{{llmNucleiOutputJsonl}}") > 0 || file_length("{{llmInjectionFindingsJsonl}}") > 0)'
+    system_prompt: |
+      You are an authorized Osmedeus autonomous recon controller.
+      You may optimize only the in-scope target {{Target}}.
+      Be conservative: prefer better target selection and parameter tuning over raw volume.
+      Do not perform credential theft, persistence, destructive exploitation, phishing, malware, or out-of-scope scanning.
+      Never run a full flow recursively. Never run modules outside the allowlist below.
+      Stop when the latest round is unlikely to add at least {{autonomousMinNewUrls}} new useful URLs, when findings are already actionable, or when {{autonomousMaxRounds}} rounds have been reached.
+      If there are no useful live surfaces or parameter candidates, write the report and stop without running modules.
+    query: |
+      Read {{autonomousContextFile}} and operate a bounded tuning loop.
+
+      Goals:
+      1. Analyze current artifact coverage and finding quality.
+      2. Choose tighter params for the next pass and save them to {{autonomousParamsFile}}.
+      3. Rerun only useful allowlisted modules, then re-read metrics/artifacts and decide whether to continue.
+      4. Save final decisions, params, commands/modules run, before/after metrics, and stop reason to {{autonomousReportFile}}.
+
+      Allowed modules only:
+      - llm-surface-analysis
+      - llm-guided-surface-scan
+      - llm-guided-vuln-scan
+      - llm-guided-injection
+      - recon-spider
+      - scan-content
+      - scan-injection
+
+      Allowed parameter families:
+      - spiderDepth, crawlingTime, spiderTimeout, spiderThreads, spiderPrallel
+      - llmInjectionLimit, injectionLimit, sqlmapRisk, sqlmapLevel, sqlmapTimeout
+      - nucleiSeverity, nucleiTimeout, extraNuclei
+      - deparosMaxtime, deparosThreads, deparosMaxPerHost, contentDiscoverWordlist
+
+      Parameter bounds:
+      - spiderDepth <= 5
+      - sqlmapRisk <= 2
+      - sqlmapLevel <= 3
+      - llmInjectionLimit <= 500
+      - injectionLimit <= 1000
+      - nucleiTimeout <= 4h
+      - spiderTimeout <= 3h
+
+      If you call tools to run modules, use only the run_module tool and the allowlist. Do not use shell commands for scanning. You may use file, grep, jq, and python tools to inspect results.
+      Before every run_module call, append a short line to {{autonomousReportFile}} explaining which module will run and why.
+      After every run_module call, append the observed result and the next decision to {{autonomousReportFile}}.
+    max_iterations: 10
+    parallel_tool_calls: false
+    agent_tools:
+      - preset: read_file
+      - preset: read_lines
+      - preset: file_exists
+      - preset: file_length
+      - preset: save_content
+      - preset: append_file
+      - preset: glob
+      - preset: grep_regex
+      - preset: jq
+      - preset: exec_python
+      - preset: run_module
+    memory:
+      max_messages: 50
+      summarize_on_truncate: true
+      persist_path: "{{autonomousAgentHistoryFile}}"
+    llm_config:
+      max_tokens: 4000
+      temperature: 0.2
+      timeout: "10m"
+      max_retries: 2
+    on_tool_start: 'log_info("Autonomous agent tool start: " + tool_name)'
+    on_tool_end: 'log_info("Autonomous agent tool end: " + tool_name)'
+    on_error:
+      - action: continue
