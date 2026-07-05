@@ -1,0 +1,406 @@
+# =============================================================================
+# Module Workflow: Authenticated Injection Scanning
+# =============================================================================
+
+kind: module
+name: auth-injection
+description: Run sqlmap and Dalfox with authenticated headers against private parameterized URLs
+tags: auth, injection, sqli, xss, sqlmap, dalfox
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authParameterizedUrlsFile
+    default: "{{Output}}/auth/parameterized-urls-{{TargetSpace}}.txt"
+  - name: authContentUrlsFile
+    default: "{{Output}}/auth/content-discovery-url-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSqlmapHeadersFile
+    default: "{{Output}}/auth/sqlmap-headers-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authInjectionDir
+    default: "{{Output}}/vulnscan/auth-injection"
+  - name: authInjectableFile
+    default: "{{Output}}/vulnscan/auth-injection/injectable-urls-{{TargetSpace}}.txt"
+  - name: authDalfoxInputFile
+    default: "{{Output}}/vulnscan/auth-injection/injectable-urls-dalfox-{{TargetSpace}}.txt"
+  - name: authSqlmapFindingsJsonl
+    default: "{{Output}}/vulnscan/auth-injection/sqlmap-findings-{{TargetSpace}}.jsonl"
+  - name: authDalfoxRawJsonl
+    default: "{{Output}}/vulnscan/auth-injection/dalfox-raw-{{TargetSpace}}.jsonl"
+  - name: authDalfoxFindingsJsonl
+    default: "{{Output}}/vulnscan/auth-injection/dalfox-findings-{{TargetSpace}}.jsonl"
+  - name: authInjectionFindingsJsonl
+    default: "{{Output}}/vulnscan/auth-injection/injection-findings-{{TargetSpace}}.jsonl"
+  - name: authInjectionCleanJsonl
+    default: "{{Output}}/vulnscan/auth-injection/injection-findings-clean-{{TargetSpace}}.jsonl"
+  - name: authInjectionMarkdownReport
+    default: "{{Output}}/vulnscan/auth-injection/injection-findings-{{TargetSpace}}.md"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: enableDalfox
+    type: bool
+    default: true
+  - name: authInjectionLimit
+    default: "500"
+  - name: sqlmapRisk
+    default: "1"
+  - name: sqlmapLevel
+    default: "2"
+  - name: injectionThreads
+    default: "{{ threads }}"
+  - name: sqlmapTimeout
+    default: "2h"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - sqlmap
+    - dalfox
+    - python3
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-sqli-results
+    path: "{{authInjectionDir}}/sqlmap-summary.txt"
+    type: txt
+    description: Authenticated sqlmap injection scan summary
+
+  - name: auth-xss-results
+    path: "{{authInjectionDir}}/dalfox-results.txt"
+    type: txt
+    description: Authenticated Dalfox XSS scan results
+
+  - name: auth-injection-findings
+    path: "{{authInjectionFindingsJsonl}}"
+    type: jsonl
+    description: Authenticated SQLi/XSS findings
+
+  - name: auth-injection-markdown-report
+    path: "{{authInjectionMarkdownReport}}"
+    type: md
+    description: Markdown report of authenticated injection findings
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-injection-folder
+    type: function
+    log: "Creating authenticated injection scan folder"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    functions:
+      - 'create_folder("{{Output}}/vulnscan")'
+      - 'create_folder("{{authInjectionDir}}")'
+
+  - name: build-auth-injectable-list
+    type: bash
+    log: "Building authenticated injectable URL list"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0'
+    commands:
+      - |
+        {
+          [ -f "{{authParameterizedUrlsFile}}" ] && cat "{{authParameterizedUrlsFile}}"
+          [ -f "{{authContentUrlsFile}}" ] && grep '?' "{{authContentUrlsFile}}"
+        } | grep '?' | sort -u | head -n {{authInjectionLimit}} > "{{authInjectableFile}}"
+    on_error:
+      - action: continue
+
+  - name: sqlmap-auth-scan
+    type: bash
+    log: "Running sqlmap with authenticated headers"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authInjectableFile}}") > 0 && file_length("{{authSqlmapHeadersFile}}") > 0'
+    commands:
+      - |
+        timeout -k 1m {{sqlmapTimeout}} sqlmap -m "{{authInjectableFile}}" \
+          --batch --random-agent \
+          --headers="$(cat "{{authSqlmapHeadersFile}}")" \
+          --level={{sqlmapLevel}} --risk={{sqlmapRisk}} \
+          --threads={{injectionThreads}} \
+          --output-dir="{{authInjectionDir}}/sqlmap" \
+          --flush-session \
+          2>&1 | tee "{{authInjectionDir}}/sqlmap-run.log" || true
+        find "{{authInjectionDir}}/sqlmap" -name 'log' -exec cat {} \; > "{{authInjectionDir}}/sqlmap-summary.txt" 2>/dev/null || true
+    on_error:
+      - action: continue
+
+  - name: normalize-auth-sqlmap-findings
+    type: bash
+    log: "Normalizing authenticated sqlmap findings"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_exists("{{authInjectionDir}}/sqlmap")'
+    commands:
+      - |
+        python3 - "{{authInjectionDir}}/sqlmap" "{{authSqlmapFindingsJsonl}}" <<'PY'
+        import csv
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        sqlmap_dir = Path(sys.argv[1])
+        out = Path(sys.argv[2])
+        findings = []
+        seen = set()
+
+        def add_finding(url, place="", parameter="", techniques="", note=""):
+            url = (url or "").strip()
+            if not url or url in seen:
+                return
+            seen.add(url)
+            host = urlparse(url).hostname or ""
+            extracted = []
+            if place:
+                extracted.append(f"place={place}")
+            if parameter:
+                extracted.append(f"parameter={parameter}")
+            if techniques:
+                extracted.append(f"techniques={techniques}")
+            if note:
+                extracted.append(f"note={note[:300]}")
+            findings.append({
+                "template-id": "auth-sqlmap-sqli",
+                "info": {
+                    "name": "SQL Injection (authenticated)",
+                    "severity": "critical",
+                    "tags": ["auth", "sqli", "sqlmap", "injection"],
+                },
+                "type": "http",
+                "host": host,
+                "url": url,
+                "matched-at": url,
+                "extracted-results": extracted,
+            })
+
+        for csv_path in sorted(sqlmap_dir.glob("results-*.csv")):
+            with csv_path.open(newline="", encoding="utf-8", errors="replace") as handle:
+                for row in csv.DictReader(handle):
+                    add_finding(
+                        row.get("Target URL") or row.get("TargetURL") or "",
+                        row.get("Place") or "",
+                        row.get("Parameter") or "",
+                        row.get("Technique(s)") or row.get("Techniques") or "",
+                        row.get("Note(s)") or row.get("Notes") or "",
+                    )
+
+        if not findings:
+            for log_path in sorted(sqlmap_dir.glob("*/log")):
+                text = log_path.read_text(encoding="utf-8", errors="replace")
+                if "injection point" not in text.lower():
+                    continue
+                target_file = log_path.parent / "target.txt"
+                url = target_file.read_text(encoding="utf-8", errors="replace").split()[0] if target_file.exists() else ""
+                parameter = ""
+                place = ""
+                techniques = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("Parameter:"):
+                        body = line.split(":", 1)[1].strip()
+                        if "(" in body and body.endswith(")"):
+                            parameter = body.split("(", 1)[0].strip()
+                            place = body.rsplit("(", 1)[1].rstrip(")").strip()
+                        else:
+                            parameter = body
+                    elif line.startswith("Type:"):
+                        techniques.append(line.split(":", 1)[1].strip())
+                add_finding(url, place, parameter, ", ".join(techniques))
+
+        out.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in findings), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: filter-auth-sqlmap-urls-for-dalfox
+    type: bash
+    log: "Removing authenticated sqlmap findings from Dalfox input list"
+    pre_condition: '"{{enableAuthScan}}" == "true" && {{enableDalfox}} && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authInjectableFile}}") > 0'
+    commands:
+      - |
+        python3 - "{{authInjectableFile}}" "{{authSqlmapFindingsJsonl}}" "{{authDalfoxInputFile}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlsplit, urlunsplit
+
+        injectable_path = Path(sys.argv[1])
+        sqlmap_findings_path = Path(sys.argv[2])
+        out_path = Path(sys.argv[3])
+
+        def normalize_url(url):
+            url = (url or "").strip()
+            if not url:
+                return ""
+            parts = urlsplit(url)
+            path = parts.path.rstrip("/") or "/"
+            return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+        skip_urls = set()
+        if sqlmap_findings_path.is_file() and sqlmap_findings_path.stat().st_size > 0:
+            for line in sqlmap_findings_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for key in ("url", "matched-at"):
+                    normalized = normalize_url(row.get(key) or "")
+                    if normalized:
+                        skip_urls.add(normalized)
+
+        kept = []
+        for line in injectable_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            url = line.strip()
+            if url and normalize_url(url) not in skip_urls:
+                kept.append(url)
+        out_path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+        PY
+      - |
+        if [ ! -f "{{authDalfoxInputFile}}" ]; then
+          cp "{{authInjectableFile}}" "{{authDalfoxInputFile}}"
+        fi
+    on_error:
+      - action: continue
+
+  - name: dalfox-auth-scan
+    type: bash
+    log: "Running Dalfox with authenticated headers"
+    pre_condition: '"{{enableAuthScan}}" == "true" && {{enableDalfox}} && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authDalfoxInputFile}}") > 0 && file_length("{{authHeaderArgsFile}}") > 0'
+    commands:
+      - |
+        header_args=()
+        while IFS= read -r header || [ -n "$header" ]; do
+          [ -n "$header" ] && header_args+=("-H" "$header")
+        done < "{{authHeaderArgsFile}}"
+        echo "[dalfox] $(date -u '+%Y-%m-%dT%H:%M:%SZ') starting authenticated XSS scan with $(wc -l < "{{authDalfoxInputFile}}") URL(s)"
+        dalfox file "{{authDalfoxInputFile}}" "${header_args[@]}" \
+          --worker {{injectionThreads}} \
+          --skip-bav --format jsonl \
+          -o "{{authDalfoxRawJsonl}}" 2>&1 | tee "{{authInjectionDir}}/dalfox-console.log" || true
+        if [ -f "{{authDalfoxRawJsonl}}" ]; then
+          cp "{{authDalfoxRawJsonl}}" "{{authInjectionDir}}/dalfox-results.txt"
+        else
+          : > "{{authInjectionDir}}/dalfox-results.txt"
+        fi
+    on_error:
+      - action: continue
+
+  - name: normalize-auth-dalfox-findings
+    type: bash
+    log: "Normalizing authenticated dalfox findings"
+    pre_condition: '"{{enableAuthScan}}" == "true" && {{enableDalfox}} && file_length("{{authDalfoxRawJsonl}}") > 0'
+    commands:
+      - |
+        python3 - "{{authDalfoxRawJsonl}}" "{{authDalfoxFindingsJsonl}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        raw = Path(sys.argv[1])
+        out = Path(sys.argv[2])
+        findings = []
+        seen = set()
+
+        for line in raw.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            record_type = str(row.get("type") or row.get("Type") or "").upper()
+            if record_type and record_type not in {"V", "VULN", "VULNERABILITY"}:
+                continue
+            url = (row.get("data") or row.get("poc") or row.get("url") or row.get("matched-at") or "").strip()
+            if not url:
+                continue
+            param = str(row.get("param") or row.get("parameter") or "").strip()
+            key = (url, param)
+            if key in seen:
+                continue
+            seen.add(key)
+            severity = str(row.get("severity") or "high").strip().lower()
+            if severity not in {"info", "low", "medium", "high", "critical", "unknown"}:
+                severity = "high"
+            host = urlparse(url).hostname or ""
+            extracted = []
+            if param:
+                extracted.append(f"parameter={param}")
+            if row.get("payload"):
+                extracted.append(f"payload={str(row.get('payload'))[:200]}")
+            findings.append({
+                "template-id": "auth-dalfox-xss",
+                "info": {
+                    "name": "Cross-Site Scripting (authenticated)",
+                    "severity": severity,
+                    "tags": ["auth", "xss", "dalfox", "injection"],
+                    "description": f"XSS confirmed by dalfox on authenticated parameter '{param}'" if param else "XSS confirmed by dalfox with authentication",
+                },
+                "type": "http",
+                "host": host,
+                "url": url,
+                "matched-at": url,
+                "extracted-results": extracted,
+            })
+
+        out.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in findings), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: merge-auth-injection-findings
+    type: bash
+    log: "Merging authenticated sqlmap and dalfox findings"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0'
+    commands:
+      - |
+        : > "{{authInjectionFindingsJsonl}}"
+        if [ -f "{{authSqlmapFindingsJsonl}}" ]; then
+          cat "{{authSqlmapFindingsJsonl}}" >> "{{authInjectionFindingsJsonl}}"
+        fi
+        if [ -f "{{authDalfoxFindingsJsonl}}" ]; then
+          cat "{{authDalfoxFindingsJsonl}}" >> "{{authInjectionFindingsJsonl}}"
+        fi
+    on_error:
+      - action: continue
+
+  - name: auth-injection-report-processing
+    type: function
+    log: "Processing authenticated injection findings report"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authInjectionFindingsJsonl}}") > 0'
+    functions:
+      - 'jsonl_filter("{{authInjectionFindingsJsonl}}", "{{authInjectionCleanJsonl}}", "template-id,info.name,info.severity,matched-at,host,url,extracted-results")'
+      - 'sort_unix("{{authInjectionCleanJsonl}}")'
+
+  - name: generate-auth-injection-md-report
+    type: function
+    log: "Generating authenticated injection findings markdown report"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authInjectionCleanJsonl}}") > 0'
+    functions:
+      - 'convert_jsonl_to_markdown("{{authInjectionCleanJsonl}}", "{{authInjectionMarkdownReport}}")'
+      - 'send_telegram_file("{{authInjectionMarkdownReport}}", "Authenticated Injection Scan Results")'
+    on_error:
+      - action: continue
+
+  - name: process-auth-injection-findings-in-db
+    type: function
+    log: "Importing authenticated injection findings into vulnerability database"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authInjectionFindingsJsonl}}") > 0'
+    functions:
+      - 'db_total_vulns("{{authInjectionFindingsJsonl}}")'
+      - 'db_import_vuln_from_file("{{TargetSpace}}", "{{authInjectionFindingsJsonl}}")'
+    on_error:
+      - action: continue

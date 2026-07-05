@@ -97,7 +97,7 @@ steps:
   - name: normalize-auth-links
     type: bash
     log: "Normalizing authenticated links"
-    pre_condition: 'file_exists("{{authLinksFile}}")'
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_exists("{{authLinksFile}}")'
     commands:
       - |
         sort -u "{{authLinksFile}}" -o "{{authLinksFile}}" 2>/dev/null || true

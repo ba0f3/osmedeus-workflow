@@ -1,0 +1,124 @@
+# =============================================================================
+# Module Workflow: Authenticated Vulnerability Scanning
+# =============================================================================
+
+kind: module
+name: auth-vuln
+description: Run Nuclei with authenticated headers against explicit authenticated scope
+tags: auth, vulnerability, nuclei
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authLinksFile
+    default: "{{Output}}/auth/links-{{TargetSpace}}.txt"
+  - name: authContentUrlsFile
+    default: "{{Output}}/auth/content-discovery-url-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authVulnDir
+    default: "{{Output}}/vulnscan/auth"
+  - name: authVulnInputFile
+    default: "{{Output}}/vulnscan/auth/input-{{TargetSpace}}.txt"
+  - name: authNucleiOutputJsonl
+    default: "{{Output}}/vulnscan/auth/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: authNucleiCleanOutputJsonl
+    default: "{{Output}}/vulnscan/auth/clean-jsonl-{{TargetSpace}}.txt"
+  - name: authNucleiMarkdownReport
+    default: "{{Output}}/vulnscan/auth/nuclei-overview-report-{{TargetSpace}}.md"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: nucleiTemplateConfig
+    default: "~/nuclei-templates/"
+  - name: nucleiThreads
+    default: "{{ threads * 10 }}"
+  - name: nucleiTimeout
+    default: "4h"
+  - name: nucleiSeverity
+    default: "critical,high,medium,low,info"
+  - name: extraNuclei
+    default: " "
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - nuclei
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-nuclei-raw-json
+    path: "{{authNucleiOutputJsonl}}"
+    type: jsonl
+    description: Authenticated nuclei findings
+
+  - name: auth-nuclei-markdown-report
+    path: "{{authNucleiMarkdownReport}}"
+    type: md
+    description: Authenticated nuclei markdown report
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-vuln-folder
+    type: function
+    log: "Creating authenticated vulnerability scan folder"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    functions:
+      - 'create_folder("{{authVulnDir}}")'
+
+  - name: build-auth-vuln-input
+    type: bash
+    log: "Building authenticated nuclei input"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authScopeFile}}") > 0'
+    commands:
+      - |
+        {
+          cat "{{authScopeFile}}"
+          [ -f "{{authLinksFile}}" ] && cat "{{authLinksFile}}"
+          [ -f "{{authContentUrlsFile}}" ] && cat "{{authContentUrlsFile}}"
+        } | sort -u > "{{authVulnInputFile}}"
+    on_error:
+      - action: continue
+
+  - name: nuclei-auth-scan
+    type: bash
+    log: "Running nuclei with authenticated headers"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authVulnInputFile}}") > 0 && file_length("{{authHeaderArgsFile}}") > 0'
+    commands:
+      - |
+        header_args=()
+        while IFS= read -r header || [ -n "$header" ]; do
+          [ -n "$header" ] && header_args+=("-H" "$header")
+        done < "{{authHeaderArgsFile}}"
+        timeout -k 1m {{nucleiTimeout}} nuclei "${header_args[@]}" -silent -c {{nucleiThreads}} -jsonl -severity "{{nucleiSeverity}}" -t {{nucleiTemplateConfig}} -l "{{authVulnInputFile}}" -irr -o "{{authNucleiOutputJsonl}}" {{extraNuclei}} > /dev/null 2>&1
+    on_error:
+      - action: continue
+
+  - name: process-auth-nuclei
+    type: function
+    log: "Processing authenticated nuclei findings"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authNucleiOutputJsonl}}") > 0'
+    functions:
+      - jsonl_filter("{{authNucleiOutputJsonl}}", "{{authNucleiCleanOutputJsonl}}", "template-id,info.name,info.severity,matched-at,matched-name")
+      - sort_unix("{{authNucleiCleanOutputJsonl}}")
+      - 'convert_jsonl_to_markdown("{{authNucleiCleanOutputJsonl}}", "{{authNucleiMarkdownReport}}")'
+      - 'db_total_vulns("{{authNucleiCleanOutputJsonl}}")'
+      - 'db_import_vuln_from_file("{{TargetSpace}}", "{{authNucleiOutputJsonl}}")'
+    on_error:
+      - action: continue
