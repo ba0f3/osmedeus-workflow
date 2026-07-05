@@ -35,6 +35,22 @@ params:
     default: "{{Output}}/entity/related-root-domains-{{TargetSpace}}.txt"
   - name: relatedHttpFile
     default: "{{Output}}/entity/related-http-{{TargetSpace}}.txt"
+  - name: authSessionReport
+    default: "{{Output}}/auth/session-report-{{TargetSpace}}.md"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authPlanFile
+    default: "{{Output}}/auth/auth-plan-{{TargetSpace}}.md"
+  - name: authConfigProposalFile
+    default: "{{Output}}/auth/auth-config-proposal-{{TargetSpace}}.yaml"
+  - name: authLinksFile
+    default: "{{Output}}/auth/links-{{TargetSpace}}.txt"
+  - name: authContentRecordsFile
+    default: "{{Output}}/auth/content-records-{{TargetSpace}}.jsonl"
+  - name: authNucleiOutputJsonl
+    default: "{{Output}}/vulnscan/auth/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: authInjectionFindingsJsonl
+    default: "{{Output}}/vulnscan/auth-injection/injection-findings-{{TargetSpace}}.jsonl"
 
   - name: llmDir
     default: "{{Output}}/llm"
@@ -109,7 +125,9 @@ steps:
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{httpInterestingJsonFile}}" \
           "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" "{{contentDiscoverUrlsFile}}" \
           "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{serviceJsonlOutput}}" \
-          "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" <<'PY'
+          "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" \
+          "{{authSessionReport}}" "{{authScopeFile}}" "{{authPlanFile}}" "{{authConfigProposalFile}}" \
+          "{{authLinksFile}}" "{{authContentRecordsFile}}" "{{authNucleiOutputJsonl}}" "{{authInjectionFindingsJsonl}}" <<'PY'
         import sys
         from pathlib import Path
 

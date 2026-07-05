@@ -54,8 +54,21 @@ params:
     default: "{{Output}}/entity/related-root-domains-{{TargetSpace}}.txt"
   - name: relatedHttpFile
     default: "{{Output}}/entity/related-http-{{TargetSpace}}.txt"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authLinksFile
+    default: "{{Output}}/auth/links-{{TargetSpace}}.txt"
+  - name: authParameterizedUrlsFile
+    default: "{{Output}}/auth/parameterized-urls-{{TargetSpace}}.txt"
+  - name: authNucleiOutputJsonl
+    default: "{{Output}}/vulnscan/auth/nuclei-jsonl-{{TargetSpace}}.txt"
+  - name: authInjectionFindingsJsonl
+    default: "{{Output}}/vulnscan/auth-injection/injection-findings-{{TargetSpace}}.jsonl"
 
   - name: enableAutonomousLLM
+    type: bool
+    default: false
+  - name: enableAuthScan
     type: bool
     default: false
   - name: autonomousMaxRounds
@@ -114,7 +127,9 @@ steps:
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" \
           "{{llmSurfaceCandidatesFile}}" "{{llmSurfaceLiveFile}}" "{{llmSurfaceLinksFile}}" "{{llmParameterCandidatesFile}}" \
           "{{llmNucleiFollowupFile}}" "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" \
-          "{{serviceJsonlOutput}}" "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" <<'PY'
+          "{{serviceJsonlOutput}}" "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" \
+          "{{authScopeFile}}" "{{authLinksFile}}" "{{authParameterizedUrlsFile}}" \
+          "{{authNucleiOutputJsonl}}" "{{authInjectionFindingsJsonl}}" <<'PY'
         import json
         import sys
         from pathlib import Path
@@ -143,6 +158,11 @@ steps:
             "entity_profile",
             "related_root_domains",
             "related_http_surfaces",
+            "auth_scope",
+            "auth_links",
+            "auth_parameterized_urls",
+            "auth_nuclei_findings",
+            "auth_injection_findings",
         ]
         paths = [Path(p) for p in sys.argv[7:]]
 
@@ -187,6 +207,13 @@ steps:
                 "has_findings": (
                     files["nuclei_findings"]["lines"]
                     + files["injection_findings"]["lines"]
+                    + files["auth_nuclei_findings"]["lines"]
+                    + files["auth_injection_findings"]["lines"]
+                ) > 0,
+                "has_auth_scope": files["auth_scope"]["lines"] > 0,
+                "has_auth_findings": (
+                    files["auth_nuclei_findings"]["lines"]
+                    + files["auth_injection_findings"]["lines"]
                 ) > 0,
             },
         }
@@ -219,13 +246,15 @@ steps:
   - name: autonomous-agent-control-loop
     type: agent
     log: "Running bounded autonomous LLM controller"
-    pre_condition: '"{{enableAutonomousLLM}}" == "true" && file_exists("{{autonomousContextFile}}") && (file_length("{{llmSurfaceLiveFile}}") > 0 || file_length("{{llmParameterCandidatesFile}}") > 0 || file_length("{{llmNucleiFollowupFile}}") > 0 || file_length("{{nucleiOutputJsonl}}") > 0 || file_length("{{injectionFindingsJsonl}}") > 0)'
+    pre_condition: '"{{enableAutonomousLLM}}" == "true" && file_exists("{{autonomousContextFile}}") && (file_length("{{llmSurfaceLiveFile}}") > 0 || file_length("{{llmParameterCandidatesFile}}") > 0 || file_length("{{llmNucleiFollowupFile}}") > 0 || file_length("{{nucleiOutputJsonl}}") > 0 || file_length("{{injectionFindingsJsonl}}") > 0 || file_length("{{authLinksFile}}") > 0 || file_length("{{authParameterizedUrlsFile}}") > 0 || file_length("{{authNucleiOutputJsonl}}") > 0 || file_length("{{authInjectionFindingsJsonl}}") > 0)'
     system_prompt: |
       You are an authorized Osmedeus autonomous recon controller.
       You may optimize only the in-scope target {{Target}}.
       Be conservative: prefer better target selection and parameter tuning over raw volume.
       Do not perform credential theft, persistence, destructive exploitation, phishing, malware, or out-of-scope scanning.
       Never run a full flow recursively. Never run modules outside the allowlist below.
+      Current enableAuthScan value: {{enableAuthScan}}.
+      Never run auth modules unless auth_scope has at least one line and the current enableAuthScan value is true.
       Stop when the latest round is unlikely to add at least {{autonomousMinNewUrls}} new useful URLs, when findings are already actionable, or when {{autonomousMaxRounds}} rounds have been reached.
       If there are no useful live surfaces or parameter candidates, write the report and stop without running modules.
       Your final action must be saving {{autonomousReportFile}}. Do not end with a plan, status sentence, or another check.
@@ -245,6 +274,11 @@ steps:
       - scan-content
       - scan-vuln
       - scan-injection
+      - auth-discovery
+      - auth-spider
+      - auth-content
+      - auth-vuln
+      - auth-injection
 
       Allowed parameter families:
       - spiderDepth, crawlingTime, spiderTimeout, spiderThreads, spiderPrallel
