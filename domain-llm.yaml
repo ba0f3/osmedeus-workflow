@@ -26,6 +26,23 @@ params:
   - name: enableAutonomousLLM
     type: bool
     default: true
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: enableAuthDiscovery
+    type: bool
+    default: true
+  - name: enableLLMAuthDiscovery
+    type: bool
+    default: true
+  - name: authMode
+    default: "manual"
+  - name: useAuthConfigProposal
+    type: bool
+    default: false
+  - name: enableAutoRegister
+    type: bool
+    default: false
 
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
@@ -172,7 +189,66 @@ modules:
       - scan-content
 
   # ===========================================================================
-  # Phase 17: Autonomous Tuning Controller
+  # Phase 17: Authentication Surface Discovery
+  # ===========================================================================
+  - name: auth-discovery
+    path: common/auth-discovery.yaml
+    depends_on:
+      - scan-injection
+
+  # ===========================================================================
+  # Phase 18: Optional Browser Authentication Capture
+  # ===========================================================================
+  - name: auth-browser-login
+    path: common/auth-browser-login.yaml
+    depends_on:
+      - auth-discovery
+
+  # ===========================================================================
+  # Phase 19: Authenticated Session Normalization
+  # ===========================================================================
+  - name: auth-session
+    path: common/auth-session.yaml
+    depends_on:
+      - auth-discovery
+      - auth-browser-login
+
+  # ===========================================================================
+  # Phase 20: Authenticated Spidering
+  # ===========================================================================
+  - name: auth-spider
+    path: common/auth-spider.yaml
+    depends_on:
+      - auth-session
+
+  # ===========================================================================
+  # Phase 21: Authenticated Content Discovery
+  # ===========================================================================
+  - name: auth-content
+    path: common/auth-content.yaml
+    depends_on:
+      - auth-session
+
+  # ===========================================================================
+  # Phase 22: Authenticated Vulnerability Scanning
+  # ===========================================================================
+  - name: auth-vuln
+    path: common/auth-vuln.yaml
+    depends_on:
+      - auth-spider
+      - auth-content
+
+  # ===========================================================================
+  # Phase 23: Authenticated Injection Scanning
+  # ===========================================================================
+  - name: auth-injection
+    path: common/auth-injection.yaml
+    depends_on:
+      - auth-spider
+      - auth-content
+
+  # ===========================================================================
+  # Phase 24: Autonomous Tuning Controller
   # ===========================================================================
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml
@@ -180,3 +256,5 @@ modules:
       - scan-vuln
       - scan-vuln-thorough
       - scan-injection
+      - auth-vuln
+      - auth-injection

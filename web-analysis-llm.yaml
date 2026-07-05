@@ -15,6 +15,23 @@ params:
   - name: enableAutonomousLLM
     type: bool
     default: true
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: enableAuthDiscovery
+    type: bool
+    default: true
+  - name: enableLLMAuthDiscovery
+    type: bool
+    default: true
+  - name: authMode
+    default: "manual"
+  - name: useAuthConfigProposal
+    type: bool
+    default: false
+  - name: enableAutoRegister
+    type: bool
+    default: false
 
 dependencies:
   variables:
@@ -69,9 +86,49 @@ modules:
       - llm-guided-surface-scan
       - do-scan-content
 
+  - name: auth-discovery
+    path: common/auth-discovery.yaml
+    depends_on:
+      - do-scan-injection
+
+  - name: auth-browser-login
+    path: common/auth-browser-login.yaml
+    depends_on:
+      - auth-discovery
+
+  - name: auth-session
+    path: common/auth-session.yaml
+    depends_on:
+      - auth-discovery
+      - auth-browser-login
+
+  - name: auth-spider
+    path: common/auth-spider.yaml
+    depends_on:
+      - auth-session
+
+  - name: auth-content
+    path: common/auth-content.yaml
+    depends_on:
+      - auth-session
+
+  - name: auth-vuln
+    path: common/auth-vuln.yaml
+    depends_on:
+      - auth-spider
+      - auth-content
+
+  - name: auth-injection
+    path: common/auth-injection.yaml
+    depends_on:
+      - auth-spider
+      - auth-content
+
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml
     depends_on:
       - do-scan-vuln
       - do-scan-vuln-thorough
       - do-scan-injection
+      - auth-vuln
+      - auth-injection
