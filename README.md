@@ -103,6 +103,7 @@ The workflow follows a phased approach to reconnaissance:
 | Module | Description |
 |--------|-------------|
 | `enum-subdomain.yaml` | Subdomain enumeration (subfinder, findomain, assetfinder) |
+| `enum-entity.yaml` | Related entity/domain discovery from certificates, CNAMEs, RDAP, and optional related-domain subdomain expansion |
 | `probe-dns.yaml` | DNS resolution and probing |
 | `recon-http-fp.yaml` | HTTP fingerprinting and technology detection |
 | `recon-screenshot.yaml` | Visual screenshots of discovered assets |
@@ -115,9 +116,7 @@ The workflow follows a phased approach to reconnaissance:
 | `scan-content.yaml` | Directory and content bruteforcing |
 | `recon-spider.yaml` | Web spidering/crawling |
 | `llm-surface-analysis.yaml` | Agent analysis of recon artifacts to infer deeper routes, APIs, and parameters |
-| `llm-guided-surface-scan.yaml` | Probes and crawls LLM-suggested surfaces |
-| `llm-guided-vuln-scan.yaml` | Runs Nuclei against LLM-tightened live surfaces |
-| `llm-guided-injection.yaml` | Tests LLM-suggested parameterized URLs with sqlmap and Dalfox |
+| `llm-guided-surface-scan.yaml` | Probes and crawls LLM-suggested surfaces, then feeds new live URLs and parameterized links into the normal scanners |
 | `llm-autonomous-controller.yaml` | Bounded agent controller that tunes params and reruns allowlisted modules until returns flatten |
 | `ad-enum.yaml` | Active Directory discovery — domain info, users, groups, computers, password policy |
 | `ad-kerberos.yaml` | Kerberos attacks — AS-REP roasting, Kerberoasting, user enumeration |

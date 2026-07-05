@@ -55,7 +55,9 @@ params:
     type: bool
     default: true
   - name: llmArtifactLineLimit
-    default: "3000"
+    default: "400"
+  - name: llmInputCharBudget
+    default: "240000"
 
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
@@ -103,7 +105,7 @@ steps:
     log: "Preparing bounded artifact context for LLM analysis"
     commands:
       - |
-        python3 - "{{llmDir}}/context-{{TargetSpace}}.md" "{{llmArtifactLineLimit}}" \
+        python3 - "{{llmDir}}/context-{{TargetSpace}}.md" "{{llmArtifactLineLimit}}" "{{llmInputCharBudget}}" \
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{httpInterestingJsonFile}}" \
           "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" "{{contentDiscoverUrlsFile}}" \
           "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{serviceJsonlOutput}}" \
@@ -113,13 +115,27 @@ steps:
 
         out = Path(sys.argv[1])
         limit = int(sys.argv[2])
-        files = [Path(p) for p in sys.argv[3:]]
+        char_budget = int(sys.argv[3])
+        files = [Path(p) for p in sys.argv[4:]]
         sections = []
+        chars_used = 0
+
+        def add(text):
+            global chars_used
+            remaining = char_budget - chars_used
+            if remaining <= 0:
+                return False
+            chunk = text[:remaining]
+            sections.append(chunk)
+            chars_used += len(chunk)
+            return len(text) <= remaining
 
         for path in files:
-            sections.append(f"\n## {path.name}\n")
+            if not add(f"\n## {path.name}\n"):
+                break
             if not path.exists():
-                sections.append("_missing_\n")
+                if not add("_missing_\n"):
+                    break
                 continue
             count = 0
             with path.open(encoding="utf-8", errors="replace") as handle:
@@ -127,11 +143,15 @@ steps:
                     line = line.rstrip()
                     if not line:
                         continue
-                    sections.append(line[:4000] + "\n")
+                    if not add(line[:2000] + "\n"):
+                        add(f"_truncated at global {{llmInputCharBudget}} character budget_\n")
+                        break
                     count += 1
                     if count >= limit:
-                        sections.append(f"_truncated after {limit} non-empty lines_\n")
+                        add(f"_truncated after {limit} non-empty lines_\n")
                         break
+            if chars_used >= char_budget:
+                break
 
         out.write_text("".join(sections), encoding="utf-8")
         PY

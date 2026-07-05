@@ -15,12 +15,20 @@ params:
     default: "{{Output}}/llm/surface-candidates-{{TargetSpace}}.txt"
   - name: llmParameterCandidatesFile
     default: "{{Output}}/llm/parameter-candidates-{{TargetSpace}}.txt"
+  - name: llmRouteCandidatesFile
+    default: "{{Output}}/llm/route-candidates-{{TargetSpace}}.txt"
+  - name: llmRouteSurfaceCandidatesFile
+    default: "{{Output}}/llm/route-surface-candidates-{{TargetSpace}}.txt"
   - name: llmSurfaceHttpJsonl
     default: "{{Output}}/llm/surface-http-{{TargetSpace}}.jsonl"
   - name: llmSurfaceLiveFile
     default: "{{Output}}/llm/surface-live-{{TargetSpace}}.txt"
   - name: llmSurfaceLinksFile
     default: "{{Output}}/llm/surface-links-{{TargetSpace}}.txt"
+  - name: httpFile
+    default: "{{Output}}/probing/http-{{TargetSpace}}.txt"
+  - name: llmRouteExpansionLimit
+    default: "2000"
   - name: linkFile
     default: "{{Output}}/links/links-{{TargetSpace}}.txt"
   - name: httpThreads
@@ -77,6 +85,55 @@ steps:
       - 'create_folder("{{Output}}/llm")'
       - 'create_folder("{{Output}}/links")'
 
+  - name: expand-route-candidates-to-surfaces
+    type: bash
+    log: "Expanding LLM route candidates against known HTTP roots"
+    pre_condition: 'file_length("{{llmRouteCandidatesFile}}") > 0 && file_length("{{httpFile}}") > 0'
+    commands:
+      - |
+        python3 - "{{httpFile}}" "{{llmRouteCandidatesFile}}" "{{llmRouteSurfaceCandidatesFile}}" "{{llmSurfaceCandidatesFile}}" "{{llmRouteExpansionLimit}}" <<'PY'
+        import sys
+        from pathlib import Path
+        from urllib.parse import urljoin
+
+        roots_path = Path(sys.argv[1])
+        routes_path = Path(sys.argv[2])
+        route_out = Path(sys.argv[3])
+        surface_path = Path(sys.argv[4])
+        limit = int(sys.argv[5])
+
+        roots = [line.strip().rstrip("/") for line in roots_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip().startswith(("http://", "https://"))]
+        routes = []
+        for raw in routes_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            route = raw.strip()
+            if not route:
+                continue
+            if not route.startswith("/"):
+                route = "/" + route
+            routes.append(route)
+
+        urls = []
+        seen = set()
+        for root in roots:
+            for route in routes:
+                url = urljoin(root + "/", route.lstrip("/"))
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+                    if len(urls) >= limit:
+                        break
+            if len(urls) >= limit:
+                break
+
+        route_out.write_text("\n".join(urls) + ("\n" if urls else ""), encoding="utf-8")
+        with surface_path.open("a", encoding="utf-8") as handle:
+            for url in urls:
+                handle.write(url + "\n")
+        PY
+        sort -u "{{llmSurfaceCandidatesFile}}" -o "{{llmSurfaceCandidatesFile}}" 2>/dev/null || true
+    on_error:
+      - action: continue
+
   - name: probe-llm-surface-candidates
     type: bash
     log: "Probing LLM-suggested surface candidates"
@@ -107,6 +164,8 @@ steps:
     pre_condition: 'file_exists("{{llmSurfaceLinksFile}}")'
     functions:
       - sort_unix("{{llmSurfaceLinksFile}}")
+      - exec_cmd("cat {{llmSurfaceLiveFile}} >> {{httpFile}}")
+      - sort_unix("{{httpFile}}")
       - exec_cmd("cat {{llmSurfaceLinksFile}} >> {{linkFile}}")
       - sort_unix("{{linkFile}}")
       - exec_cmd("grep '?' {{llmSurfaceLinksFile}} | grep -Fi '{{TargetSpace}}' >> {{llmParameterCandidatesFile}} || true")

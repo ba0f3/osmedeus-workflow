@@ -23,6 +23,9 @@ params:
   - name: enableLLMRecon
     type: bool
     default: true
+  - name: enableAutonomousLLM
+    type: bool
+    default: true
 
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
@@ -130,7 +133,6 @@ modules:
     path: common/llm-surface-analysis.yaml
     depends_on:
       - recon-spider
-      - scan-content
       - util-archive
       - probe-port
       - scan-service
@@ -153,15 +155,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 15: LLM-Guided Vulnerability Scanning
-  # ===========================================================================
-  - name: llm-guided-vuln-scan
-    path: common/llm-guided-vuln-scan.yaml
-    depends_on:
-      - scan-vuln
-
-  # ===========================================================================
-  # Phase 16: Thorough Vulnerability Scanning with Vigolium
+  # Phase 15: Thorough Vulnerability Scanning with Vigolium
   # ===========================================================================
   - name: scan-vuln-thorough
     path: common/scan-vuln-thorough.yaml
@@ -169,7 +163,7 @@ modules:
       - llm-guided-surface-scan
 
   # ===========================================================================
-  # Phase 17: Injection Scanning on Tightened Crawled URLs
+  # Phase 16: Injection Scanning on Tightened Crawled URLs
   # ===========================================================================
   - name: scan-injection
     path: common/scan-injection.yaml
@@ -178,19 +172,11 @@ modules:
       - scan-content
 
   # ===========================================================================
-  # Phase 18: LLM-Guided Injection Scanning
-  # ===========================================================================
-  - name: llm-guided-injection
-    path: common/llm-guided-injection.yaml
-    depends_on:
-      - scan-injection
-
-  # ===========================================================================
-  # Phase 19: Autonomous Tuning Controller
+  # Phase 17: Autonomous Tuning Controller
   # ===========================================================================
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml
     depends_on:
-      - llm-guided-vuln-scan
+      - scan-vuln
       - scan-vuln-thorough
-      - llm-guided-injection
+      - scan-injection

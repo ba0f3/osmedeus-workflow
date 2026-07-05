@@ -40,14 +40,12 @@ params:
     default: "{{Output}}/llm/surface-links-{{TargetSpace}}.txt"
   - name: llmParameterCandidatesFile
     default: "{{Output}}/llm/parameter-candidates-{{TargetSpace}}.txt"
+  - name: llmNucleiFollowupFile
+    default: "{{Output}}/llm/nuclei-followup-{{TargetSpace}}.md"
   - name: nucleiOutputJsonl
     default: "{{Output}}/vulnscan/nuclei-jsonl-{{TargetSpace}}.txt"
-  - name: llmNucleiOutputJsonl
-    default: "{{Output}}/vulnscan/llm/nuclei-jsonl-{{TargetSpace}}.txt"
   - name: injectionFindingsJsonl
     default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
-  - name: llmInjectionFindingsJsonl
-    default: "{{Output}}/vulnscan/llm-injection/injection-findings-{{TargetSpace}}.jsonl"
   - name: serviceJsonlOutput
     default: "{{Output}}/services/services-{{TargetSpace}}.jsonl"
   - name: entityProfileFile
@@ -115,7 +113,7 @@ steps:
         python3 - "{{autonomousMetricsFile}}" "{{autonomousContextFile}}" "{{Target}}" "{{autonomousMaxRounds}}" "{{autonomousMinNewUrls}}" "{{autonomousMaxExtraMinutes}}" \
           "{{httpFile}}" "{{httpFingerprintJsonFile}}" "{{linkFile}}" "{{contentDiscoveryJsonlFile}}" \
           "{{llmSurfaceCandidatesFile}}" "{{llmSurfaceLiveFile}}" "{{llmSurfaceLinksFile}}" "{{llmParameterCandidatesFile}}" \
-          "{{nucleiOutputJsonl}}" "{{llmNucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" "{{llmInjectionFindingsJsonl}}" \
+          "{{llmNucleiFollowupFile}}" "{{nucleiOutputJsonl}}" "{{injectionFindingsJsonl}}" \
           "{{serviceJsonlOutput}}" "{{entityProfileFile}}" "{{relatedRootDomainsFile}}" "{{relatedHttpFile}}" <<'PY'
         import json
         import sys
@@ -138,10 +136,9 @@ steps:
             "llm_live_surfaces",
             "llm_surface_links",
             "llm_parameter_candidates",
+            "llm_nuclei_followup",
             "nuclei_findings",
-            "llm_nuclei_findings",
             "injection_findings",
-            "llm_injection_findings",
             "network_services",
             "entity_profile",
             "related_root_domains",
@@ -189,9 +186,7 @@ steps:
                 "has_llm_live_surfaces": files["llm_live_surfaces"]["lines"] > 0,
                 "has_findings": (
                     files["nuclei_findings"]["lines"]
-                    + files["llm_nuclei_findings"]["lines"]
                     + files["injection_findings"]["lines"]
-                    + files["llm_injection_findings"]["lines"]
                 ) > 0,
             },
         }
@@ -224,7 +219,7 @@ steps:
   - name: autonomous-agent-control-loop
     type: agent
     log: "Running bounded autonomous LLM controller"
-    pre_condition: '"{{enableAutonomousLLM}}" == "true" && file_exists("{{autonomousContextFile}}") && (file_length("{{llmSurfaceLiveFile}}") > 0 || file_length("{{llmParameterCandidatesFile}}") > 0 || file_length("{{llmNucleiOutputJsonl}}") > 0 || file_length("{{llmInjectionFindingsJsonl}}") > 0)'
+    pre_condition: '"{{enableAutonomousLLM}}" == "true" && file_exists("{{autonomousContextFile}}") && (file_length("{{llmSurfaceLiveFile}}") > 0 || file_length("{{llmParameterCandidatesFile}}") > 0 || file_length("{{llmNucleiFollowupFile}}") > 0 || file_length("{{nucleiOutputJsonl}}") > 0 || file_length("{{injectionFindingsJsonl}}") > 0)'
     system_prompt: |
       You are an authorized Osmedeus autonomous recon controller.
       You may optimize only the in-scope target {{Target}}.
@@ -246,10 +241,9 @@ steps:
       Allowed modules only:
       - llm-surface-analysis
       - llm-guided-surface-scan
-      - llm-guided-vuln-scan
-      - llm-guided-injection
       - recon-spider
       - scan-content
+      - scan-vuln
       - scan-injection
 
       Allowed parameter families:

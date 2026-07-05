@@ -12,6 +12,9 @@ params:
   - name: enableLLMRecon
     type: bool
     default: true
+  - name: enableAutonomousLLM
+    type: bool
+    default: true
 
 dependencies:
   variables:
@@ -55,11 +58,6 @@ modules:
     depends_on:
       - llm-guided-surface-scan
 
-  - name: llm-guided-vuln-scan
-    path: common/llm-guided-vuln-scan.yaml
-    depends_on:
-      - do-scan-vuln
-
   - name: do-scan-vuln-thorough
     path: fragments/do-scan-vuln-thorough.yaml
     depends_on:
@@ -71,14 +69,9 @@ modules:
       - llm-guided-surface-scan
       - do-scan-content
 
-  - name: llm-guided-injection
-    path: common/llm-guided-injection.yaml
-    depends_on:
-      - do-scan-injection
-
   - name: llm-autonomous-controller
     path: common/llm-autonomous-controller.yaml
     depends_on:
-      - llm-guided-vuln-scan
+      - do-scan-vuln
       - do-scan-vuln-thorough
-      - llm-guided-injection
+      - do-scan-injection

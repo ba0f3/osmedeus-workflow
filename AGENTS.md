@@ -310,6 +310,7 @@ For single-URL flows, add a `fragments/do-my-scanner.yaml` and reference it from
 | `url` / `web-analysis` | Single URL; uses `fragments/do-*` |
 | `cidr` / `cidr-extensive` | IP range targets |
 | `fast` | Reduced scope |
+| `domain-llm` / `web-analysis-llm` | LLM-augmented variants; see "LLM Flows" below |
 
 ## Common Mistakes (Learned from Production Runs)
 
@@ -320,6 +321,7 @@ For single-URL flows, add a `fragments/do-my-scanner.yaml` and reference it from
 5. **Flow param not deployed to server** — `extends` overrides won't apply if server still has an old flat YAML.
 6. **Module depends only on spider but reads content-discovery** — parallel modules may not have finished; add `depends_on: [scan-content]` if both inputs are required.
 7. **Using `{{var}}` inside foreach step commands** — use `[[line]]` for the loop variable.
+8. **Reusing workspace with LLM flows** — `llm-guided-surface-scan` appends LLM-discovered hosts into `probing/http-*.txt`. On the next run with the same workspace, stale augmented hosts leak into fingerprint/spider/content phases. Always use a fresh workspace for LLM flows.
 
 ## Useful Commands
 
@@ -348,6 +350,40 @@ osmedeus query steps --run <run-uuid>
 - Wire new modules into `general.yaml` and `domain-extensive.yaml` if they belong in standard recon.
 - Update `README.md` module table when adding a user-facing module.
 - Run `osmedeus workflow lint` on touched YAML before suggesting deploy.
+
+## LLM Flows
+
+`domain-llm` and `web-analysis-llm` extend their standard counterparts by inserting an LLM analysis + surface expansion layer between recon and scanning.
+
+### Pipeline difference from standard flows
+
+```
+recon (spider, content, entity, ports, services)
+  → llm-surface-analysis (agent: infer routes/params from artifacts)
+  → llm-guided-surface-scan (probe + crawl LLM suggestions, merge into httpFile + linkFile)
+  → baseline scanners (scan-vuln, scan-injection, scan-vuln-thorough)  ← now see LLM-augmented inputs
+  → llm-autonomous-controller (bounded self-tuning loop)
+```
+
+The LLM does **not** run its own scanners. It feeds discovered URLs into the standard scanning modules via file mutation (`httpFile`, `linkFile`, `llmParameterCandidatesFile`).
+
+### Key params
+
+| Param | Default | Effect |
+|-------|---------|--------|
+| `enableLLMRecon` | `true` | Master toggle for the LLM agent in `llm-surface-analysis` |
+| `enableAutonomousLLM` | `true` in LLM flows | Enables the self-tuning controller loop |
+| `llmArtifactLineLimit` | `400` | Max lines per artifact fed to agent |
+| `llmInputCharBudget` | `240000` | Global character budget for agent context |
+| `llmRouteExpansionLimit` | `2000` | Max URLs from route × root cartesian expansion |
+
+### `httpFile` mutation
+
+`llm-guided-surface-scan` appends LLM-discovered live hosts to `probing/http-*.txt`. This is intentional — downstream `scan-vuln` and `scan-vuln-thorough` then scan the augmented set. **Do not reuse the workspace** across LLM runs; stale hosts from a prior run will pollute upstream phases.
+
+### `enum-entity` not in URL flows
+
+`web-analysis-llm` does not include `enum-entity` (it requires `Target: type: domain` and crt.sh queries malform with URL targets). The LLM agent and controller tolerate missing entity files gracefully (`_missing_` sections in context).
 
 ## External References
 
