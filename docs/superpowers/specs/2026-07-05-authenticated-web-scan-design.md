@@ -15,6 +15,7 @@ The design uses a dedicated auth second pass. Public recon remains unchanged and
 - Apply auth only to selected web phases: spidering, content discovery, nuclei, sqlmap, and Dalfox.
 - Do not modify the baseline modules initially; use dedicated `auth-*` modules for isolation.
 - Provide an authenticated-only execution path for cases where public recon was already completed.
+- Use LLM assistance for authentication discovery and config proposal, but keep login/register execution deterministic and explicitly gated.
 
 ## Session Artifacts
 
@@ -73,6 +74,50 @@ Cookie: sid=value
 
 ## Modules
 
+### `common/auth-discovery.yaml`
+
+Detects likely login, register, and session-check surfaces from existing public recon artifacts.
+
+Inputs:
+
+- `httpFile`
+- `httpFingerprintJsonFile`
+- `linkFile`
+- `contentDiscoveryJsonlFile`
+- `contentDiscoverUrlsFile`
+- `enableAuthDiscovery`
+- `enableLLMAuthDiscovery`
+
+Outputs:
+
+- `auth/login-candidates-{{TargetSpace}}.jsonl`
+- `auth/register-candidates-{{TargetSpace}}.jsonl`
+- `auth/auth-check-candidates-{{TargetSpace}}.jsonl`
+- `auth/auth-plan-{{TargetSpace}}.md`
+- `auth/auth-config-proposal-{{TargetSpace}}.yaml`
+
+Behavior:
+
+- Skips unless `enableAuthDiscovery=true`.
+- Searches for login/register/logout/account/dashboard routes and forms using deterministic parsing first.
+- Uses an LLM only to classify candidates and propose config values.
+- Does not execute login, registration, or credential submission.
+- Does not include raw secrets because it runs before session creation.
+- Keeps every candidate constrained to `Target` and the explicit auth scope if one is already provided.
+
+LLM auth discovery can infer:
+
+- likely login URLs
+- likely register URLs
+- form field names
+- CSRF hidden field names
+- API login endpoints
+- expected token JSON paths
+- likely auth check URLs
+- expected logged-in body regex such as `logout|dashboard|account`
+
+The LLM writes a proposal, not an executable decision. `auth-session` may consume the proposal only when the user enables it with `useAuthConfigProposal=true`.
+
 ### `common/auth-session.yaml`
 
 Creates the auth directory and normalizes manual, form-login, and API-login inputs into the shared session artifact format.
@@ -90,6 +135,13 @@ Inputs:
 - `authApiLoginMethod`
 - `authApiLoginBody`
 - `authTokenJsonPath`
+- `useAuthConfigProposal`
+- `authConfigProposalFile`
+- `enableAutoRegister`
+- `registerScope`
+- `registerEmailTemplate`
+- `registerUsernameTemplate`
+- `registerPassword`
 - `authCheckUrl`
 - `authCheckStatus`
 - `authCheckRegex`
@@ -106,6 +158,9 @@ Behavior:
 
 - Skips unless `enableAuthScan=true`.
 - When `authMode=browser`, delegates session creation to `auth-browser-login` and validates the files it produces.
+- When `useAuthConfigProposal=true`, loads missing login/API/check settings from `auth/auth-config-proposal-*.yaml`.
+- Never uses LLM-proposed scope unless it is also present in `authScope` or `authScopeFile`.
+- Never performs account registration unless `enableAutoRegister=true` and `registerScope` is non-empty.
 - Fails closed if scope is empty.
 - If `authCheckUrl` is set, verifies the session before downstream auth modules run.
 - Writes plaintext auth files to workspace.
@@ -229,6 +284,17 @@ Each auth module should read these generated helper files rather than reconstruc
 Add a standalone flow for authenticated testing against an existing workspace or explicit target scope:
 
 ```text
+auth-discovery
+  -> auth-session
+  -> auth-spider + auth-content
+  -> auth-vuln + auth-injection
+  -> llm-surface-analysis
+  -> llm-autonomous-controller
+```
+
+If `enableAuthDiscovery=false`, the flow starts effectively at `auth-session`:
+
+```text
 auth-session
   -> auth-spider + auth-content
   -> auth-vuln + auth-injection
@@ -258,6 +324,7 @@ Authenticated scanning runs after the public scan path:
 public recon
   -> llm surface expansion
   -> public vuln/content/injection scans
+  -> auth-discovery
   -> auth-session
   -> auth-spider + auth-content
   -> auth-vuln + auth-injection
@@ -270,6 +337,7 @@ Auth scanning is optional and disabled by default:
 
 ```text
 normal recon
+  -> auth-discovery
   -> auth-session
   -> auth-spider + auth-content
   -> auth-vuln + auth-injection
@@ -281,6 +349,12 @@ Flow params:
 - name: enableAuthScan
   type: bool
   default: false
+- name: enableAuthDiscovery
+  type: bool
+  default: true
+- name: enableLLMAuthDiscovery
+  type: bool
+  default: true
 - name: skipPublicRecon
   type: bool
   default: false
@@ -292,6 +366,12 @@ Flow params:
   default: "{{Output}}/auth/headers-{{TargetSpace}}.txt"
 - name: authCookieFile
   default: "{{Output}}/auth/cookies-{{TargetSpace}}.txt"
+- name: useAuthConfigProposal
+  type: bool
+  default: false
+- name: enableAutoRegister
+  type: bool
+  default: false
 ```
 
 `skipPublicRecon=true` is only valid in flows that are explicitly designed to honor it. For the first implementation, `auth-only` is the preferred way to avoid repeated public scans. If `skipPublicRecon` is added to `domain-llm` or `web-analysis-llm`, every public module in that flow must have a guard that skips cleanly while preserving the auth module chain.
@@ -329,10 +409,27 @@ osmedeus run -f auth-only -t example.com \
   -p 'authTokenJsonPath=.token'
 ```
 
+Example using LLM-discovered login config after review:
+
+```bash
+osmedeus run -f auth-only -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'enableAuthDiscovery=true' \
+  -p 'enableLLMAuthDiscovery=true' \
+  -p 'useAuthConfigProposal=true' \
+  -p 'authMode=form' \
+  -p 'authScope=https://app.example.com' \
+  -p 'authUsername=demo' \
+  -p 'authPassword=demo'
+```
+
 ## Safety and Failure Handling
 
 - Auth modules never run unless `enableAuthScan=true`.
+- Auth discovery may run without credentials, but it must not submit forms or tokens.
 - Auth modules never run unless `auth/scope-*.txt` has at least one URL.
+- Auto-registration never runs unless `enableAutoRegister=true`, `registerScope` is non-empty, and a fixed test-account template is provided.
+- Auto-registration must not solve CAPTCHA, bypass MFA, or create accounts outside explicit `registerScope`.
 - If login fails, `auth-session` writes a failure report and downstream auth modules skip.
 - If `authCheckUrl` is provided, it must pass before scanning.
 - Default auth check status is `200`.
@@ -348,6 +445,8 @@ LLM context should include auth metadata and private discoveries, not raw secret
 Files added to LLM context:
 
 ```text
+auth/auth-plan-*.md
+auth/auth-config-proposal-*.yaml
 auth/session-report-*.md
 auth/scope-*.txt
 auth/links-*.txt
@@ -378,9 +477,12 @@ The autonomous controller gets auth metrics:
 }
 ```
 
+The LLM may help detect authentication surfaces before login, but it must not receive raw credentials or raw token/cookie values. It may propose config, classify auth type, and suggest checks. Deterministic workflow steps perform the actual login, registration, and scanner execution.
+
 The controller allowlist must include only these auth modules:
 
 ```text
+auth-discovery
 auth-spider
 auth-content
 auth-vuln
@@ -393,6 +495,7 @@ Lint:
 
 ```bash
 osmedeus workflow lint common/auth-session.yaml
+osmedeus workflow lint common/auth-discovery.yaml
 osmedeus workflow lint common/auth-browser-login.yaml
 osmedeus workflow lint common/auth-spider.yaml
 osmedeus workflow lint common/auth-content.yaml
@@ -406,6 +509,7 @@ Dry-run:
 
 ```bash
 osmedeus run -m ./common/auth-session.yaml -t example.com --dry-run
+osmedeus run -m ./common/auth-discovery.yaml -t example.com --dry-run
 osmedeus run -f ./web-analysis-llm.yaml -t https://app.example.com \
   -p 'enableAuthScan=true' \
   -p 'authMode=manual' \
@@ -417,6 +521,7 @@ osmedeus run -f ./web-analysis-llm.yaml -t https://app.example.com \
 Functional test targets:
 
 - Manual header mode: a local HTTP app that requires `Authorization`.
+- Auth discovery mode: a local HTTP app with login/register forms and API login endpoints.
 - API login mode: `/api/login` returns a token and `/api/private` requires it.
 - Form login mode: `/login` sets a cookie and `/dashboard` requires it.
 - Browser mode: JS login writes a token to localStorage and Playwright captures/maps it.
@@ -424,18 +529,23 @@ Functional test targets:
 Success criteria:
 
 - No auth module runs when `enableAuthScan=false`.
+- Auth discovery can produce candidates without running login or registration.
 - `auth-only` does not render or execute public recon modules.
 - `auth-only` can use existing public artifacts as read-only context when they exist.
 - Auth modules skip when scope is empty.
 - Headers/cookies are passed to spider/content/nuclei/sqlmap/Dalfox.
 - Auth artifacts remain separate from baseline artifacts.
 - LLM context includes auth metadata and private links but not raw secrets.
+- LLM auth discovery proposals are never used unless `useAuthConfigProposal=true`.
+- Auto-registration does not run unless `enableAutoRegister=true`.
 - Dry-runs render without undefined params or bad preconditions.
 
 ## Non-Goals
 
 - No credential brute force.
 - No MFA bypass.
+- No CAPTCHA solving.
 - No automatic scanning outside explicit auth scope.
+- No automatic account registration unless explicitly enabled with a fixed test-account template.
 - No secret encryption in the first implementation.
 - No replacement of baseline public recon modules.
