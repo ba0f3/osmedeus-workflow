@@ -29,6 +29,7 @@ For additional workflow examples and patterns, see the [test workflows](https://
 ├── fragments/           # Fragments used by workflows
 ├── cidr.yaml            # CIDR/IP range workflow
 ├── cidr-extensive.yaml  # Extended CIDR workflow
+├── auth-only.yaml       # Authenticated-only web testing flow
 ├── domain-lite.yaml     # Lightweight domain recon
 ├── domain-standard.yaml # Standard domain recon
 ├── domain-extensive.yaml# Extended domain recon
@@ -93,6 +94,7 @@ The workflow follows a phased approach to reconnaissance:
 | `web-analysis.yaml` | Web application analysis workflow |
 | `domain-llm.yaml` | LLM-guided deep domain reconnaissance with agent surface expansion |
 | `web-analysis-llm.yaml` | LLM-guided single URL analysis with smarter surface and parameter discovery |
+| `auth-only.yaml` | Authenticated-only testing for an existing workspace or explicit private scope |
 | `repo.yaml` | Source repository scanning workflow |
 | `sast.yaml` | Static application security testing workflow |
 | `ad-standard.yaml` | Standard Active Directory assessment — domain discovery, LDAP/SMB enum, Kerberos attacks |
@@ -118,6 +120,13 @@ The workflow follows a phased approach to reconnaissance:
 | `llm-surface-analysis.yaml` | Agent analysis of recon artifacts to infer deeper routes, APIs, and parameters |
 | `llm-guided-surface-scan.yaml` | Probes and crawls LLM-suggested surfaces, then feeds new live URLs and parameterized links into the normal scanners |
 | `llm-autonomous-controller.yaml` | Bounded agent controller that tunes params and reruns allowlisted modules until returns flatten |
+| `auth-discovery.yaml` | Detects login/register/session-check surfaces and writes LLM-assisted auth config proposals |
+| `auth-session.yaml` | Normalizes manual/form/API/browser authentication into reusable plaintext session artifacts |
+| `auth-browser-login.yaml` | Optional Playwright-based login capture for JS-heavy applications |
+| `auth-spider.yaml` | Authenticated crawling against explicit auth scope |
+| `auth-content.yaml` | Authenticated content discovery against explicit auth scope |
+| `auth-vuln.yaml` | Authenticated nuclei scan with preserved headers/cookies |
+| `auth-injection.yaml` | Authenticated sqlmap/Dalfox scan for private parameterized URLs |
 | `ad-enum.yaml` | Active Directory discovery — domain info, users, groups, computers, password policy |
 | `ad-kerberos.yaml` | Kerberos attacks — AS-REP roasting, Kerberoasting, user enumeration |
 | `ad-ldap.yaml` | LDAP interrogation — anonymous bind, domain dump, signing checks |
@@ -176,6 +185,46 @@ osmedeus run -f ad-extensive -t 10.10.10.10 -p 'domainName=corp.local' -p 'authU
 # AD module specific
 osmedeus run -m ad-enum -t 10.10.10.10
 ```
+
+### Authenticated scanning
+
+Run only authenticated tests when public recon already exists:
+
+```bash
+osmedeus run -f auth-only -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'authMode=manual' \
+  -p 'authScope=https://app.example.com' \
+  -p 'authHeaderFile=/path/to/headers.txt'
+```
+
+Run LLM-guided recon plus an authenticated second pass:
+
+```bash
+osmedeus run -f domain-llm -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'authMode=api' \
+  -p 'authScope=https://api.example.com' \
+  -p 'authLoginUrl=https://api.example.com/login' \
+  -p 'authApiLoginBodyFile=/path/to/api-login-body.json' \
+  -p 'authTokenJsonPath=.token'
+```
+
+Use LLM auth discovery as a reviewed config proposal, then provide credentials through files:
+
+```bash
+osmedeus run -f auth-only -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'enableAuthDiscovery=true' \
+  -p 'enableLLMAuthDiscovery=true' \
+  -p 'useAuthConfigProposal=true' \
+  -p 'authMode=form' \
+  -p 'authScope=https://app.example.com' \
+  -p 'authUsernameFile=/path/to/username.txt' \
+  -p 'authPasswordFile=/path/to/password.txt'
+```
+
+Direct secret params such as `authHeader`, `authCookie`, `authApiLoginBody`, `authUsername`, and `authPassword` are intentionally not consumed by auth modules because rendered Osmedeus runs can expose params in logs and dry-runs.
 
 ## Building Your Own Workflow
 
