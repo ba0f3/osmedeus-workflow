@@ -1,0 +1,455 @@
+# =============================================================================
+# Module Workflow: Authenticated Session Normalization
+# =============================================================================
+
+kind: module
+name: auth-session
+description: Normalize manual, form, API, or browser authentication into reusable session artifacts
+tags: auth, session, web, authenticated
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authDir
+    default: "{{Output}}/auth"
+  - name: authSessionFile
+    default: "{{Output}}/auth/session-{{TargetSpace}}.json"
+  - name: authHeaderFile
+    default: "{{Output}}/auth/headers-{{TargetSpace}}.txt"
+  - name: authCookieFile
+    default: "{{Output}}/auth/cookies-{{TargetSpace}}.txt"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSqlmapHeadersFile
+    default: "{{Output}}/auth/sqlmap-headers-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authSessionReport
+    default: "{{Output}}/auth/session-report-{{TargetSpace}}.md"
+  - name: authConfigProposalFile
+    default: "{{Output}}/auth/auth-config-proposal-{{TargetSpace}}.yaml"
+  - name: authApiLoginBodyFile
+    default: "{{Output}}/auth/api-login-body-{{TargetSpace}}.json"
+  - name: authUsernameFile
+    default: "{{Output}}/auth/username-{{TargetSpace}}.txt"
+  - name: authPasswordFile
+    default: "{{Output}}/auth/password-{{TargetSpace}}.txt"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: authMode
+    default: "manual"
+  - name: authScope
+    default: ""
+  - name: authHeader
+    default: ""
+  - name: authCookie
+    default: ""
+  - name: authLoginUrl
+    default: ""
+  - name: authUsername
+    default: ""
+  - name: authPassword
+    default: ""
+  - name: authApiLoginMethod
+    default: "POST"
+  - name: authApiLoginBody
+    default: ""
+  - name: authTokenJsonPath
+    default: ".token"
+  - name: authCheckUrl
+    default: ""
+  - name: authCheckStatus
+    default: "200"
+  - name: authCheckRegex
+    default: ""
+  - name: useAuthConfigProposal
+    type: bool
+    default: false
+  - name: enableAutoRegister
+    type: bool
+    default: false
+  - name: registerScope
+    default: ""
+  - name: registerEmailTemplate
+    default: ""
+  - name: registerUsernameTemplate
+    default: ""
+  - name: registerPassword
+    default: ""
+  - name: defaultUA
+    default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - python3
+    - curl
+    - jq
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-session-report
+    path: "{{authSessionReport}}"
+    type: md
+    description: Authenticated session summary without raw secret values
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-folder
+    type: function
+    log: "Creating auth output folder"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    functions:
+      - 'create_folder("{{authDir}}")'
+
+  - name: normalize-manual-input
+    type: bash
+    log: "Normalizing manual auth scope, headers, and cookies"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    commands:
+      - |
+        python3 - "{{Target}}" "{{authMode}}" "{{authScope}}" \
+          "{{authScopeFile}}" "{{authHeaderFile}}" "{{authCookieFile}}" "{{authSessionFile}}" "{{authSessionReport}}" <<'PY'
+        import json
+        import sys
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        target, mode, scope_raw = sys.argv[1:4]
+        scope_file, header_file, cookie_file, session_file, report_file = map(Path, sys.argv[4:9])
+
+        def split_values(value):
+            out = []
+            for chunk in (value or "").replace(",", "\n").splitlines():
+                chunk = chunk.strip()
+                if chunk:
+                    out.append(chunk)
+            return out
+
+        def normalize_cookie(value):
+            value = value.strip()
+            if value.lower().startswith("cookie:"):
+                value = value.split(":", 1)[1].strip()
+            return value
+
+        scope = split_values(scope_raw)
+        headers = []
+        cookies = []
+
+        if scope_file.exists():
+            scope.extend(split_values(scope_file.read_text(encoding="utf-8", errors="replace")))
+        if header_file.exists():
+            headers.extend(split_values(header_file.read_text(encoding="utf-8", errors="replace")))
+        if cookie_file.exists():
+            cookies.extend(normalize_cookie(item) for item in split_values(cookie_file.read_text(encoding="utf-8", errors="replace")))
+
+        scope = sorted(dict.fromkeys(scope))
+        headers = sorted(dict.fromkeys(headers))
+        cookies = sorted(dict.fromkeys(item for item in cookies if item))
+
+        scope_file.write_text("\n".join(scope) + ("\n" if scope else ""), encoding="utf-8")
+        header_file.write_text("\n".join(headers) + ("\n" if headers else ""), encoding="utf-8")
+        cookie_file.write_text("\n".join(cookies) + ("\n" if cookies else ""), encoding="utf-8")
+
+        header_map = {}
+        for line in headers:
+            if ":" in line:
+                name, value = line.split(":", 1)
+                header_map[name.strip()] = value.strip()
+        if cookies and "Cookie" not in header_map:
+            cookie_header = "; ".join(cookies)
+            header_map["Cookie"] = cookie_header
+            headers.append(f"Cookie: {cookie_header}")
+            headers = sorted(dict.fromkeys(headers))
+            header_file.write_text("\n".join(headers) + "\n", encoding="utf-8")
+
+        session = {
+            "target": target,
+            "source": mode,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "headers": header_map,
+            "cookies": [{"raw": item} for item in cookies],
+            "scope": scope,
+            "evidence": {},
+        }
+        session_file.write_text(json.dumps(session, indent=2), encoding="utf-8")
+
+        report_lines = [
+            f"# Auth Session - {target}",
+            "",
+            f"- Mode: {mode}",
+            f"- Scope count: {len(scope)}",
+            f"- Headers present: {', '.join(sorted(header_map)) if header_map else 'None'}",
+            f"- Cookies present: {len(cookies)}",
+            "- Auth check: not configured",
+            "- Secret handling: direct secret params are intentionally not consumed to avoid Osmedeus render/log leakage; use authHeaderFile/authCookieFile/authApiLoginBodyFile/authUsernameFile/authPasswordFile artifacts.",
+            "",
+        ]
+        report_file.write_text("\n".join(report_lines), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: api-login
+    type: bash
+    log: "Performing API login when configured"
+    pre_condition: '"{{enableAuthScan}}" == "true" && "{{authMode}}" == "api"'
+    commands:
+      - |
+        cat > "{{authDir}}/api-login-url-{{TargetSpace}}.txt" <<'EOF'
+        {{authLoginUrl}}
+        EOF
+        python3 - "{{authDir}}/api-login-url-{{TargetSpace}}.txt" "{{authApiLoginBodyFile}}" "{{authHeaderFile}}" \
+          "{{authDir}}/api-login-response-{{TargetSpace}}.json" "{{authSessionReport}}" "{{defaultUA}}" \
+          "{{authApiLoginMethod}}" "{{authTokenJsonPath}}" <<'PY'
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        url_file, body_file, header_file, response_file, report_file = map(Path, sys.argv[1:6])
+        user_agent, method, token_json_path = sys.argv[6:9]
+
+        login_url = url_file.read_text(encoding="utf-8", errors="replace").strip()
+        report = Path(report_file)
+        if not login_url:
+            report.write_text(report.read_text(encoding="utf-8", errors="replace") + "api login skipped: login URL is not configured\n", encoding="utf-8")
+            raise SystemExit(0)
+        if not body_file.exists() or body_file.stat().st_size == 0:
+            report.write_text(report.read_text(encoding="utf-8", errors="replace") + "api login skipped: request body file is not configured\n", encoding="utf-8")
+            raise SystemExit(0)
+
+        subprocess.run([
+            "curl", "-ksS", "-X", method, "-H", user_agent, "-H", "Content-Type: application/json",
+            "--data-binary", f"@{body_file}", login_url, "-o", str(response_file),
+        ], check=False)
+        token_result = subprocess.run(
+            ["jq", "-r", f"{token_json_path} // empty", str(response_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        token = token_result.stdout.strip()
+        if token and token != "null":
+            existing = []
+            if header_file.exists():
+                existing = [
+                    line for line in header_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if not line.lower().startswith("authorization:")
+                ]
+            existing.append(f"Authorization: Bearer {token}")
+            header_file.write_text("\n".join(existing) + "\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: form-login
+    type: bash
+    log: "Performing simple form login when configured"
+    pre_condition: '"{{enableAuthScan}}" == "true" && "{{authMode}}" == "form"'
+    commands:
+      - |
+        cat > "{{authDir}}/form-login-url-{{TargetSpace}}.txt" <<'EOF'
+        {{authLoginUrl}}
+        EOF
+        python3 - "{{authDir}}/form-login-url-{{TargetSpace}}.txt" "{{authUsernameFile}}" "{{authPasswordFile}}" \
+          "{{authDir}}/form-login-cookies-{{TargetSpace}}.jar" "{{authCookieFile}}" "{{authHeaderFile}}" \
+          "{{authDir}}/form-login-response-{{TargetSpace}}.html" "{{authSessionReport}}" "{{defaultUA}}" <<'PY'
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        url_file, username_file, password_file, cookiejar, cookie_file, header_file, response_file, report_file = map(Path, sys.argv[1:9])
+        user_agent = sys.argv[9]
+
+        login_url = url_file.read_text(encoding="utf-8", errors="replace").strip()
+        report = Path(report_file)
+        if not login_url:
+            report.write_text(report.read_text(encoding="utf-8", errors="replace") + "form login skipped: login URL is not configured\n", encoding="utf-8")
+            raise SystemExit(0)
+        if not username_file.exists() or username_file.stat().st_size == 0 or not password_file.exists() or password_file.stat().st_size == 0:
+            report.write_text(report.read_text(encoding="utf-8", errors="replace") + "form login skipped: username or password file is not configured\n", encoding="utf-8")
+            raise SystemExit(0)
+
+        subprocess.run([
+            "curl", "-ksS", "-c", str(cookiejar), "-b", str(cookiejar), "-H", user_agent,
+            "--data-urlencode", f"username@{username_file}",
+            "--data-urlencode", f"password@{password_file}",
+            login_url, "-o", str(response_file),
+        ], check=False)
+
+        cookies = []
+        if cookiejar.exists():
+            for line in cookiejar.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    cookies.append(f"{parts[5]}={parts[6]}")
+        if cookies:
+            cookie = "; ".join(cookies)
+            cookie_file.write_text(cookie + "\n", encoding="utf-8")
+            existing = []
+            if header_file.exists():
+                existing = [
+                    line for line in header_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if not line.lower().startswith("cookie:")
+                ]
+            existing.append(f"Cookie: {cookie}")
+            header_file.write_text("\n".join(existing) + "\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: generate-auth-helper-files
+    type: bash
+    log: "Generating reusable auth header arguments"
+    pre_condition: '"{{enableAuthScan}}" == "true" && (file_length("{{authHeaderFile}}") > 0 || file_length("{{authCookieFile}}") > 0)'
+    commands:
+      - |
+        python3 - "{{authHeaderFile}}" "{{authCookieFile}}" "{{authHeaderArgsFile}}" "{{authSqlmapHeadersFile}}" "{{authSessionFile}}" "{{authSessionReport}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        header_file, cookie_file, args_file, sqlmap_file, session_file, report_file = map(Path, sys.argv[1:7])
+        headers = [line.strip() for line in header_file.read_text(encoding="utf-8", errors="replace").splitlines() if ":" in line]
+        cookies = []
+        if cookie_file.exists():
+            for line in cookie_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.lower().startswith("cookie:"):
+                    line = line.split(":", 1)[1].strip()
+                if line:
+                    cookies.append(line)
+        header_names = {line.split(":", 1)[0].strip().lower() for line in headers}
+        if cookies and "cookie" not in header_names:
+            headers.append("Cookie: " + "; ".join(cookies))
+            header_file.write_text("\n".join(headers) + "\n", encoding="utf-8")
+        args_file.write_text("\n".join(headers) + ("\n" if headers else ""), encoding="utf-8")
+        sqlmap_file.write_text("\\r\\n".join(headers), encoding="utf-8")
+
+        if session_file.exists():
+            session = json.loads(session_file.read_text(encoding="utf-8", errors="replace"))
+        else:
+            session = {"headers": {}, "cookies": [], "scope": []}
+        session["headers"] = {h.split(":", 1)[0].strip(): h.split(":", 1)[1].strip() for h in headers}
+        session["cookies"] = [{"raw": item} for item in cookies]
+        session_file.write_text(json.dumps(session, indent=2), encoding="utf-8")
+
+        text = report_file.read_text(encoding="utf-8", errors="replace") if report_file.exists() else "# Auth Session\n"
+        text += f"\n- Header arg file: `{args_file}`\n- sqlmap header file: `{sqlmap_file}`\n"
+        report_file.write_text(text, encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: mark-session-valid-without-check
+    type: bash
+    log: "Marking auth session valid because no auth check is configured"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    commands:
+      - |
+        cat > "{{authDir}}/auth-check-url-{{TargetSpace}}.txt" <<'EOF'
+        {{authCheckUrl}}
+        EOF
+        python3 - "{{authDir}}/auth-check-url-{{TargetSpace}}.txt" "{{authHeaderArgsFile}}" "{{authScopeFile}}" \
+          "{{authSessionValidFile}}" "{{authSessionReport}}" <<'PY'
+        import sys
+        from pathlib import Path
+
+        check_url_file, header_args_file, scope_file, valid_file, report_file = map(Path, sys.argv[1:6])
+        check_url = check_url_file.read_text(encoding="utf-8", errors="replace").strip()
+        if check_url:
+            raise SystemExit(0)
+
+        if valid_file.exists():
+            valid_file.unlink()
+        report = report_file.read_text(encoding="utf-8", errors="replace") if report_file.exists() else ""
+        if not header_args_file.exists() or header_args_file.stat().st_size == 0 or not scope_file.exists() or scope_file.stat().st_size == 0:
+            report_file.write_text(report + "auth session not marked valid: scope or auth headers are missing\n", encoding="utf-8")
+            raise SystemExit(0)
+
+        valid_file.write_text("valid\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: auth-check
+    type: bash
+    log: "Checking authenticated session"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    commands:
+      - |
+        cat > "{{authDir}}/auth-check-url-{{TargetSpace}}.txt" <<'EOF'
+        {{authCheckUrl}}
+        EOF
+        cat > "{{authDir}}/auth-check-regex-{{TargetSpace}}.txt" <<'EOF'
+        {{authCheckRegex}}
+        EOF
+        python3 - "{{authDir}}/auth-check-url-{{TargetSpace}}.txt" "{{authDir}}/auth-check-regex-{{TargetSpace}}.txt" \
+          "{{authHeaderArgsFile}}" "{{authDir}}/auth-check-body-{{TargetSpace}}.txt" \
+          "{{authDir}}/auth-check-status-{{TargetSpace}}.txt" "{{authSessionValidFile}}" "{{authSessionReport}}" \
+          "{{authCheckStatus}}" <<'PY'
+        import re
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        check_url_file, regex_file, header_args_file, body_file, status_file, valid_file, report_file = map(Path, sys.argv[1:8])
+        expected_status = sys.argv[8]
+        check_url = check_url_file.read_text(encoding="utf-8", errors="replace").strip()
+        check_regex = regex_file.read_text(encoding="utf-8", errors="replace").strip()
+
+        if valid_file.exists():
+            valid_file.unlink()
+        if not check_url:
+            raise SystemExit(0)
+
+        curl_args = ["curl", "-ksS", "-o", str(body_file), "-w", "%{http_code}"]
+        if header_args_file.exists():
+            for header in header_args_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                header = header.strip()
+                if header:
+                    curl_args.extend(["-H", header])
+        curl_args.append(check_url)
+        result = subprocess.run(curl_args, check=False, capture_output=True, text=True)
+        status = result.stdout.strip()
+        status_file.write_text(status + "\n", encoding="utf-8")
+
+        report = report_file.read_text(encoding="utf-8", errors="replace") if report_file.exists() else ""
+        if status != expected_status:
+            report_file.write_text(report + f"auth check failed: expected {expected_status}, got {status}\n", encoding="utf-8")
+            raise SystemExit(0)
+        if check_regex:
+            body = body_file.read_text(encoding="utf-8", errors="replace") if body_file.exists() else ""
+            try:
+                matched = re.search(check_regex, body) is not None
+            except re.error:
+                report_file.write_text(report + "auth check failed: invalid regex configured\n", encoding="utf-8")
+                raise SystemExit(0)
+            if not matched:
+                report_file.write_text(report + "auth check failed: regex not found\n", encoding="utf-8")
+                raise SystemExit(0)
+
+        valid_file.write_text("valid\n", encoding="utf-8")
+        report_file.write_text(report + f"auth check passed: {status}\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue

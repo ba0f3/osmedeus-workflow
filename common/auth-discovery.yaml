@@ -1,0 +1,288 @@
+# =============================================================================
+# Module Workflow: Authentication Surface Discovery
+# =============================================================================
+
+kind: module
+name: auth-discovery
+description: Discover likely login, registration, and authenticated check surfaces without submitting credentials
+tags: auth, discovery, llm, login, register
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authDir
+    default: "{{Output}}/auth"
+  - name: httpFile
+    default: "{{Output}}/probing/http-{{TargetSpace}}.txt"
+  - name: httpFingerprintJsonFile
+    default: "{{Output}}/fingerprint/http-fingerprint-{{TargetSpace}}.jsonl"
+  - name: linkFile
+    default: "{{Output}}/links/links-{{TargetSpace}}.txt"
+  - name: contentDiscoveryJsonlFile
+    default: "{{Output}}/content-discovery/deparos-records-{{TargetSpace}}.jsonl"
+  - name: contentDiscoverUrlsFile
+    default: "{{Output}}/content-discovery/content-discovery-url-{{TargetSpace}}.txt"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authLoginCandidatesFile
+    default: "{{Output}}/auth/login-candidates-{{TargetSpace}}.jsonl"
+  - name: authRegisterCandidatesFile
+    default: "{{Output}}/auth/register-candidates-{{TargetSpace}}.jsonl"
+  - name: authCheckCandidatesFile
+    default: "{{Output}}/auth/auth-check-candidates-{{TargetSpace}}.jsonl"
+  - name: authPlanFile
+    default: "{{Output}}/auth/auth-plan-{{TargetSpace}}.md"
+  - name: authConfigProposalFile
+    default: "{{Output}}/auth/auth-config-proposal-{{TargetSpace}}.yaml"
+
+  - name: enableAuthDiscovery
+    type: bool
+    default: true
+  - name: enableLLMAuthDiscovery
+    type: bool
+    default: true
+  - name: authDiscoveryLineLimit
+    default: "2000"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - python3
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-plan
+    path: "{{authPlanFile}}"
+    type: md
+    description: Authentication discovery plan and candidate summary
+
+  - name: auth-config-proposal
+    path: "{{authConfigProposalFile}}"
+    type: yaml
+    description: Proposed auth-session parameters generated from discovered login surfaces
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-folder
+    type: function
+    log: "Creating auth discovery output folder"
+    functions:
+      - 'create_folder("{{authDir}}")'
+
+  - name: deterministic-auth-discovery
+    type: bash
+    log: "Finding likely auth URLs from existing artifacts"
+    pre_condition: '{{enableAuthDiscovery}}'
+    commands:
+      - |
+        python3 - "{{Target}}" "{{authDiscoveryLineLimit}}" "{{authScopeFile}}" \
+          "{{authLoginCandidatesFile}}" "{{authRegisterCandidatesFile}}" "{{authCheckCandidatesFile}}" "{{authPlanFile}}" \
+          "{{httpFile}}" "{{linkFile}}" "{{contentDiscoverUrlsFile}}" "{{httpFingerprintJsonFile}}" "{{contentDiscoveryJsonlFile}}" <<'PY'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlsplit
+
+        target = sys.argv[1].lower().strip()
+        try:
+            limit = max(1, int(sys.argv[2]))
+        except ValueError:
+            limit = 2000
+        scope_file = Path(sys.argv[3])
+        login_out, register_out, check_out, plan_out = map(Path, sys.argv[4:8])
+        input_paths = [Path(p) for p in sys.argv[8:]]
+
+        auth_words = {
+            "login": ["login", "log-in", "signin", "sign-in", "auth", "authenticate", "session", "sso", "oauth"],
+            "register": ["register", "registration", "signup", "sign-up", "join", "create-account", "create_account"],
+            "check": ["me", "profile", "account", "dashboard", "settings", "preferences", "logout", "signout"],
+        }
+        url_fields = (
+            "url", "matched-at", "matched_at", "host", "input", "location", "redirect",
+            "final_url", "endpoint", "path",
+        )
+
+        def read_lines(path):
+            if not path.exists():
+                return []
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                return [line.strip() for line in handle if line.strip()]
+
+        explicit_scope = set(read_lines(scope_file))
+
+        def in_scope(url):
+            try:
+                parsed = urlsplit(url)
+            except ValueError:
+                return False
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme not in ("http", "https") or not host:
+                return False
+            if explicit_scope:
+                for root in explicit_scope:
+                    root = root.rstrip("/")
+                    if url == root or url.startswith(root + "/"):
+                        return True
+                return False
+            return host == target or host.endswith("." + target) or target in host
+
+        def values_from_json(row):
+            values = []
+            if isinstance(row, dict):
+                values.extend(row.get(field) for field in url_fields)
+                data = row.get("data")
+                if isinstance(data, dict):
+                    values.extend(data.get(field) for field in url_fields)
+            return [str(value) for value in values if value]
+
+        def extract_urls(path):
+            urls = []
+            if not path.exists():
+                return urls
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                for count, line in enumerate(handle, start=1):
+                    if count > limit:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    values = [line]
+                    try:
+                        values.extend(values_from_json(json.loads(line)))
+                    except json.JSONDecodeError:
+                        pass
+                    for value in values:
+                        for match in re.findall(r"https?://[^\s\"'<>]+", value):
+                            urls.append(match.rstrip(".,;)]}"))
+            return urls
+
+        def score_url(url, bucket):
+            lowered = url.lower()
+            path = urlsplit(url).path.lower()
+            score = 0
+            for word in auth_words[bucket]:
+                if word in path:
+                    score += 3
+                elif word in lowered:
+                    score += 1
+            if bucket == "login" and re.search(r"/(login|signin|auth|session)(/|$)", path):
+                score += 3
+            if bucket == "register" and re.search(r"/(register|signup|join)(/|$)", path):
+                score += 3
+            if bucket == "check" and re.search(r"/(me|profile|account|dashboard|settings)(/|$)", path):
+                score += 3
+            return score
+
+        buckets = {"login": {}, "register": {}, "check": {}}
+        sources = {}
+        for path in input_paths:
+            for url in extract_urls(path):
+                if not in_scope(url):
+                    continue
+                sources.setdefault(url, set()).add(path.name)
+                for bucket in buckets:
+                    score = score_url(url, bucket)
+                    if score <= 0:
+                        continue
+                    existing = buckets[bucket].get(url)
+                    if not existing or score > existing["score"]:
+                        buckets[bucket][url] = {
+                            "url": url,
+                            "source": sorted(sources[url]),
+                            "reason": bucket,
+                            "score": score,
+                        }
+
+        for bucket in buckets.values():
+            for url, row in bucket.items():
+                row["source"] = sorted(sources.get(url, row.get("source", [])))
+
+        for out_path, bucket_name in ((login_out, "login"), (register_out, "register"), (check_out, "check")):
+            rows = sorted(buckets[bucket_name].values(), key=lambda item: (-item["score"], item["url"]))
+            out_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+        plan = [
+            f"# Auth Discovery - {target}",
+            "",
+            "This module only proposes authentication surfaces. It does not consume credentials, submit login forms, register accounts, or validate sessions.",
+            "",
+            f"- Login candidates: {len(buckets['login'])}",
+            f"- Register candidates: {len(buckets['register'])}",
+            f"- Auth check candidates: {len(buckets['check'])}",
+            "",
+            "## Top Login Candidates",
+        ]
+        for row in sorted(buckets["login"].values(), key=lambda item: (-item["score"], item["url"]))[:20]:
+            plan.append(f"- {row['url']} (score {row['score']}, sources: {', '.join(row['source'])})")
+        plan.extend(["", "## Top Register Candidates"])
+        for row in sorted(buckets["register"].values(), key=lambda item: (-item["score"], item["url"]))[:20]:
+            plan.append(f"- {row['url']} (score {row['score']}, sources: {', '.join(row['source'])})")
+        plan.extend(["", "## Top Auth Check Candidates"])
+        for row in sorted(buckets["check"].values(), key=lambda item: (-item["score"], item["url"]))[:20]:
+            plan.append(f"- {row['url']} (score {row['score']}, sources: {', '.join(row['source'])})")
+        plan_out.write_text("\n".join(plan) + "\n", encoding="utf-8")
+        PY
+    on_error:
+      - action: continue
+
+  - name: llm-auth-config-proposal
+    type: agent
+    log: "Using LLM to classify auth surfaces and propose auth-session config"
+    pre_condition: '{{enableAuthDiscovery}} && {{enableLLMAuthDiscovery}} && (file_length("{{authLoginCandidatesFile}}") > 0 || file_length("{{authRegisterCandidatesFile}}") > 0)'
+    system_prompt: |
+      You are an authorized web authentication workflow analyst.
+      You may inspect candidate URLs and propose configuration only.
+      Do not submit credentials, register accounts, bypass MFA, solve CAPTCHA, or expand scope.
+      Do not include raw secrets in any output.
+    query: |
+      Read:
+      - {{authLoginCandidatesFile}}
+      - {{authRegisterCandidatesFile}}
+      - {{authCheckCandidatesFile}}
+      - {{authPlanFile}}
+
+      Update {{authPlanFile}} with:
+      - likely auth type: form, api, browser, or manual
+      - strongest login/register/check candidates
+      - field names likely needed
+      - suggested auth check URL and body regex
+      - reasons and confidence
+
+      Write {{authConfigProposalFile}} as YAML with these keys only:
+      authMode: ""
+      authLoginUrl: ""
+      authUsernameField: "username"
+      authPasswordField: "password"
+      authApiLoginMethod: "POST"
+      authApiLoginBody: ""
+      authTokenJsonPath: ".token"
+      authCheckUrl: ""
+      authCheckRegex: ""
+
+      Keep all URLs inside {{Target}} or existing auth scope artifacts. Leave fields empty when unsure.
+    max_iterations: 8
+    parallel_tool_calls: false
+    agent_tools:
+      - preset: read_file
+      - preset: file_exists
+      - preset: file_length
+      - preset: save_content
+    llm_config:
+      max_tokens: 3000
+      temperature: 0.1
+      timeout: "5m"
+      max_retries: 2
+    on_error:
+      - action: continue
