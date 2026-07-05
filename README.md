@@ -114,7 +114,7 @@ The workflow follows a phased approach to reconnaissance:
 | `probe-port.yaml` | Port scanning |
 | `scan-service.yaml` | Network service audit for SSH, FTP, SMTP, IMAP, SMB, RDP, LDAP, databases, and caches |
 | `scan-vuln.yaml` | Vulnerability scanning |
-| `scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scanning |
+| `scan-vuln-thorough.yaml` | Deep Vigolium vulnerability scanning with spidering, discovery, and follow-subdomain support |
 | `scan-content.yaml` | Directory and content bruteforcing |
 | `recon-spider.yaml` | Web spidering/crawling |
 | `llm-surface-analysis.yaml` | Agent analysis of recon artifacts to infer deeper routes, APIs, and parameters |
@@ -151,7 +151,7 @@ The workflow follows a phased approach to reconnaissance:
 | `do-probe-port.yaml` | Port scan fragment |
 | `do-scan-content.yaml` | Content discovery fragment |
 | `do-scan-vuln.yaml` | Vulnerability scan fragment |
-| `do-scan-vuln-thorough.yaml` | Thorough Vigolium vulnerability scan fragment |
+| `do-scan-vuln-thorough.yaml` | Deep Vigolium vulnerability scan fragment |
 | `do-deep-vuln-scan.yaml` | Deep vulnerability scan fragment |
 | `do-scan-repo.yaml` | Repository scanning fragment |
 | `do-util-normalize.yaml` | Normalization utility fragment |
@@ -210,7 +210,7 @@ osmedeus run -f domain-llm -t example.com \
   -p 'authTokenJsonPath=.token'
 ```
 
-See the workflow guide at [docs/llm-workflow-guide.md](docs/llm-workflow-guide.md) for the recommended LLM module pattern, guardrails, and flow wiring.
+See the workflow guide at [docs/llm-workflow-guide.md](docs/llm-workflow-guide.md) for the recommended LLM module pattern, guardrails, and flow wiring. See the Vigolium workflow guide at [docs/vigolium-workflow-guide.md](docs/vigolium-workflow-guide.md) for deep scan tuning and the injection-focused Vigolium pass.
 
 Use LLM auth discovery as a reviewed config proposal, then provide credentials through files:
 

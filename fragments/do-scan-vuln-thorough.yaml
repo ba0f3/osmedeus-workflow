@@ -24,11 +24,50 @@ params:
     default: "{{ threads * 5 }}"
   - name: vigoliumMaxPerHost
     default: "50"
+  - name: vigoliumMaxFindingsPerModule
+    default: "25"
   - name: vigoliumStrategy
-    default: "balanced"
+    default: "deep"
+  - name: vigoliumIntensity
+    default: "deep"
   - name: vigoliumSkipPhases
-    default: "known-issue-scan"
+    default: ""
+  - name: enableVigoliumDiscover
+    type: bool
+    default: true
+  - name: enableVigoliumSpider
+    type: bool
+    default: true
+  - name: enableVigoliumExternalHarvest
+    type: bool
+    default: false
+  - name: enableVigoliumFollowSubdomains
+    type: bool
+    default: true
+  - name: enableVigoliumNoTechFilter
+    type: bool
+    default: false
+  - name: enableVigoliumKnownIssueScan
+    type: bool
+    default: false
+  - name: enableVigoliumFocusedHostSweep
+    type: bool
+    default: true
+  - name: vigoliumFocusedHostTags
+    default: "mcp,api-security,auth-bypass,cloud,cache-poisoning,request-smuggling,aspnet,nextjs,spring,java,php,python,javascript,cms,info-disclosure,misconfiguration,ssrf,rce"
+  - name: vigoliumFocusedHostTimeout
+    default: "45m"
+  - name: vigoliumFocusedHostScanningMaxDuration
+    default: "30m"
+  - name: vigoliumFocusedHostConcurrency
+    default: "{{ threads * 3 }}"
+  - name: vigoliumFocusedHostMaxPerHost
+    default: "20"
+  - name: vigoliumFocusedHostMaxFindingsPerModule
+    default: "25"
   - name: extraVigoliumScan
+    default: " "
+  - name: extraVigoliumFocusedHost
     default: " "
 
   - name: vigoliumDefaultUA
@@ -120,9 +159,67 @@ steps:
     step:
       name: vigolium-single-target
       type: bash
-      command: "timeout -k 1m {{vigoliumTimeout}} vigolium scan --db-isolate --soft-fail --silent -H \"{{vigoliumDefaultUA}}\" --scanning-max-duration {{vigoliumScanningMaxDuration}} --omit-response --db {{vigoliumVulnDBFile}} --skip {{vigoliumSkipPhases}} --strategy {{vigoliumStrategy}} --concurrency {{vigoliumConcurrency}} --max-per-host {{vigoliumMaxPerHost}} -t '[[line]]' {{extraVigoliumScan}}"
+      command: |
+        scan_flags=""
+        [ "{{enableVigoliumDiscover}}" = "true" ] && scan_flags="$scan_flags --discover"
+        [ "{{enableVigoliumSpider}}" = "true" ] && scan_flags="$scan_flags --spider"
+        [ "{{enableVigoliumExternalHarvest}}" = "true" ] && scan_flags="$scan_flags --external-harvest"
+        [ "{{enableVigoliumFollowSubdomains}}" = "true" ] && scan_flags="$scan_flags --follow-subdomains"
+        [ "{{enableVigoliumNoTechFilter}}" = "true" ] && scan_flags="$scan_flags --no-tech-filter"
+
+        skip_flags=""
+        [ "{{enableVigoliumKnownIssueScan}}" != "true" ] && skip_flags="$skip_flags --skip known-issue-scan"
+        if [ -n "{{vigoliumSkipPhases}}" ]; then
+          skip_flags="$skip_flags --skip {{vigoliumSkipPhases}}"
+        fi
+
+        timeout -k 1m {{vigoliumTimeout}} vigolium scan --db-isolate --soft-fail --silent \
+          -H "{{vigoliumDefaultUA}}" \
+          --scanning-max-duration {{vigoliumScanningMaxDuration}} \
+          --omit-response \
+          --db {{vigoliumVulnDBFile}} \
+          --strategy {{vigoliumStrategy}} \
+          --intensity {{vigoliumIntensity}} \
+          --concurrency {{vigoliumConcurrency}} \
+          --max-per-host {{vigoliumMaxPerHost}} \
+          --max-findings-per-module {{vigoliumMaxFindingsPerModule}} \
+          $scan_flags $skip_flags \
+          -t '[[line]]' {{extraVigoliumScan}}
       on_error:
         - action: continue # keep scanning remaining targets if one target fails
+
+  - name: vigolium-focused-host-sweep
+    type: foreach
+    log: "Running focused Vigolium host/framework sweep"
+    pre_condition: '{{enableVigoliumFocusedHostSweep}} && file_exists("{{httpFile}}")'
+    input: "{{httpFile}}"
+    variable: line
+    threads: "{{vigoliumParallel}}"
+    step:
+      name: vigolium-focused-host-target
+      type: bash
+      command: |
+        tag_flags=""
+        for tag in $(echo "{{vigoliumFocusedHostTags}}" | tr ',' ' '); do
+          [ -n "$tag" ] && tag_flags="$tag_flags --module-tag $tag"
+        done
+
+        timeout -k 1m {{vigoliumFocusedHostTimeout}} vigolium scan --db-isolate --soft-fail --silent \
+          -H "{{vigoliumDefaultUA}}" \
+          --only dynamic-assessment \
+          --strategy {{vigoliumStrategy}} \
+          --intensity {{vigoliumIntensity}} \
+          --no-tech-filter \
+          --concurrency {{vigoliumFocusedHostConcurrency}} \
+          --max-per-host {{vigoliumFocusedHostMaxPerHost}} \
+          --max-findings-per-module {{vigoliumFocusedHostMaxFindingsPerModule}} \
+          --scanning-max-duration {{vigoliumFocusedHostScanningMaxDuration}} \
+          --omit-response \
+          --db {{vigoliumVulnDBFile}} \
+          $tag_flags \
+          -t '[[line]]' {{extraVigoliumFocusedHost}}
+      on_error:
+        - action: continue
 
   - name: generate-vigolium-vuln-reports
     type: bash

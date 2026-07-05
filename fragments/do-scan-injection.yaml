@@ -27,6 +27,16 @@ params:
     default: "{{Output}}/vulnscan/injection/dalfox-findings-{{TargetSpace}}.jsonl"
   - name: dalfoxRawJsonl
     default: "{{Output}}/vulnscan/injection/dalfox-raw-{{TargetSpace}}.jsonl"
+  - name: vigoliumInjectionDBDir
+    default: "{{Output}}/vulnscan/injection/vigolium-dbs"
+  - name: vigoliumInjectionDBFile
+    default: "{{Output}}/vulnscan/injection/vigolium-dbs/vgnm-injection-{{TargetSpace}}.sqlite"
+  - name: vigoliumInjectionJsonl
+    default: "{{Output}}/vulnscan/injection/vigolium-injection-{{TargetSpace}}.jsonl"
+  - name: vigoliumInjectionFindingsJsonl
+    default: "{{Output}}/vulnscan/injection/vigolium-findings-{{TargetSpace}}.jsonl"
+  - name: vigoliumInjectionHTMLReport
+    default: "{{Output}}/vulnscan/injection/vigolium-injection-{{TargetSpace}}.html"
   - name: injectionFindingsJsonl
     default: "{{Output}}/vulnscan/injection/injection-findings-{{TargetSpace}}.jsonl"
   - name: injectionCleanJsonl
@@ -47,9 +57,35 @@ params:
   - name: enableDalfox
     type: bool
     default: true
+  - name: enableVigoliumInjection
+    type: bool
+    default: true
+  - name: vigoliumInjectionTimeout
+    default: "2h"
+  - name: vigoliumInjectionScanningMaxDuration
+    default: "90m"
+  - name: vigoliumInjectionStrategy
+    default: "deep"
+  - name: vigoliumInjectionIntensity
+    default: "deep"
+  - name: vigoliumInjectionConcurrency
+    default: "{{ threads * 5 }}"
+  - name: vigoliumInjectionMaxPerHost
+    default: "20"
+  - name: vigoliumInjectionMaxFindingsPerModule
+    default: "25"
+  - name: vigoliumInjectionModuleTags
+    default: "injection,sqli,xss,graphql,lfi,ssrf,ssti,rce,command-injection,xxe,prototype-pollution,api,api-security,auth-bypass,idor,csrf,open-redirect,jwt,websocket"
+  - name: enableVigoliumInjectionNoTechFilter
+    type: bool
+    default: true
+  - name: extraVigoliumInjection
+    default: " "
 
   - name: defaultUA
     default: "User-Agent: Mozilla/5.0 (compatible; Osmedeus/v5; +https://github.com/j3ssie/osmedeus)"
+  - name: vigoliumDefaultUA
+    default: "User-Agent: Mozilla/5.0 (compatible; Vigolium OSS +https://github.com/vigolium/vigolium)"
 
 # -----------------------------------------------------------------------------
 # DEPENDENCIES SECTION
@@ -59,6 +95,7 @@ dependencies:
     - sqlmap
     - dalfox
     - python3
+    - jq
 
   variables:
     - name: Target
@@ -89,6 +126,11 @@ reports:
     type: md
     description: Markdown report of injection findings
 
+  - name: vigolium-injection-report
+    path: "{{vigoliumInjectionHTMLReport}}"
+    type: html
+    description: Vigolium injection-focused scan report
+
 # -----------------------------------------------------------------------------
 # STEPS SECTION
 # -----------------------------------------------------------------------------
@@ -99,6 +141,7 @@ steps:
     functions:
       - 'create_folder("{{Output}}/vulnscan")'
       - 'create_folder("{{injectionDir}}")'
+      - 'create_folder("{{vigoliumInjectionDBDir}}")'
 
   - name: build-injectable-url-list
     type: bash
@@ -109,6 +152,68 @@ steps:
           [ -f "{{linkFile}}" ] && cat "{{linkFile}}"
           [ -f "{{contentDiscoveryUrlFile}}" ] && cat "{{contentDiscoveryUrlFile}}"
         } | grep '?' | grep -Fi '{{Target}}' | sort -u | head -n {{injectionLimit}} > "{{injectableFile}}"
+    on_error:
+      - action: continue
+
+  - name: vigolium-injection-scan
+    type: bash
+    log: "Running Vigolium deep injection scan on parameterized URLs"
+    pre_condition: '{{enableVigoliumInjection}} && file_length("{{injectableFile}}") > 0'
+    commands:
+      - |
+        tag_flags=""
+        for tag in $(echo "{{vigoliumInjectionModuleTags}}" | tr ',' ' '); do
+          [ -n "$tag" ] && tag_flags="$tag_flags --module-tag $tag"
+        done
+        scan_flags=""
+        [ "{{enableVigoliumInjectionNoTechFilter}}" = "true" ] && scan_flags="$scan_flags --no-tech-filter"
+
+        timeout -k 1m {{vigoliumInjectionTimeout}} vigolium scan --db-isolate --soft-fail --silent \
+          -H "{{vigoliumDefaultUA}}" \
+          --only dynamic-assessment \
+          --strategy {{vigoliumInjectionStrategy}} \
+          --intensity {{vigoliumInjectionIntensity}} \
+          --concurrency {{vigoliumInjectionConcurrency}} \
+          --max-per-host {{vigoliumInjectionMaxPerHost}} \
+          --max-findings-per-module {{vigoliumInjectionMaxFindingsPerModule}} \
+          --scanning-max-duration {{vigoliumInjectionScanningMaxDuration}} \
+          --omit-response \
+          --db "{{vigoliumInjectionDBFile}}" \
+          -T "{{injectableFile}}" \
+          $scan_flags $tag_flags {{extraVigoliumInjection}} \
+          2>&1 | tee "{{injectionDir}}/vigolium-injection-console.log" || true
+      - |
+        if [ -f "{{vigoliumInjectionDBFile}}" ]; then
+          vigolium export --silent --db "{{vigoliumInjectionDBFile}}" --only findings --omit-response --format html -o "{{vigoliumInjectionHTMLReport}}" || true
+          vigolium export --silent --db "{{vigoliumInjectionDBFile}}" --omit-response --format jsonl -o "{{vigoliumInjectionJsonl}}" || true
+        fi
+    on_error:
+      - action: continue
+
+  - name: normalize-vigolium-injection-findings
+    type: bash
+    log: "Normalizing Vigolium injection findings for vulnerability DB import"
+    pre_condition: '{{enableVigoliumInjection}} && file_length("{{vigoliumInjectionJsonl}}") > 0'
+    commands:
+      - |
+        jq -c '
+          (.data? // .) as $d
+          | select((.type? // "finding") == "finding")
+          | {
+              "template-id": ("vigolium-" + (($d.module_id // $d.module_name // "finding") | tostring)),
+              "info": {
+                "name": ($d.module_name // $d.title // "Vigolium finding"),
+                "severity": (($d.severity // "medium") | ascii_downcase),
+                "tags": ["vigolium", "injection"]
+              },
+              "type": "http",
+              "host": ($d.hostname // ""),
+              "url": ($d.url // ""),
+              "matched-at": ((($d.matched_at // [$d.url]) | if type == "array" then .[0] else . end) // $d.url // ""),
+              "extracted-results": (($d.extracted_results // $d.evidence // []) | if type == "array" then . else [.] end)
+            }
+          | with_entries(select(.value != null and .value != [] and .value != ""))
+        ' "{{vigoliumInjectionJsonl}}" > "{{vigoliumInjectionFindingsJsonl}}"
     on_error:
       - action: continue
 
@@ -409,7 +514,7 @@ steps:
 
   - name: merge-injection-findings
     type: bash
-    log: "Merging sqlmap and dalfox findings"
+    log: "Merging sqlmap, dalfox, and Vigolium findings"
     commands:
       - |
         : > "{{injectionFindingsJsonl}}"
@@ -419,6 +524,10 @@ steps:
         if [ -f "{{dalfoxFindingsJsonl}}" ]; then
           cat "{{dalfoxFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
         fi
+        if [ -f "{{vigoliumInjectionFindingsJsonl}}" ]; then
+          cat "{{vigoliumInjectionFindingsJsonl}}" >> "{{injectionFindingsJsonl}}"
+        fi
+        sort -u "{{injectionFindingsJsonl}}" -o "{{injectionFindingsJsonl}}"
     on_error:
       - action: continue
 
