@@ -1,0 +1,271 @@
+# =============================================================================
+# Module Workflow: Browser Authentication Capture
+# =============================================================================
+
+kind: module
+name: auth-browser-login
+description: Capture authenticated cookies and browser storage with Playwright for JS-heavy login flows
+tags: auth, browser, playwright, login
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authDir
+    default: "{{Output}}/auth"
+  - name: authSessionFile
+    default: "{{Output}}/auth/session-{{TargetSpace}}.json"
+  - name: authHeaderFile
+    default: "{{Output}}/auth/headers-{{TargetSpace}}.txt"
+  - name: authCookieFile
+    default: "{{Output}}/auth/cookies-{{TargetSpace}}.txt"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSqlmapHeadersFile
+    default: "{{Output}}/auth/sqlmap-headers-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authSessionReport
+    default: "{{Output}}/auth/session-report-{{TargetSpace}}.md"
+  - name: authUsernameFile
+    default: "{{Output}}/auth/username-{{TargetSpace}}.txt"
+  - name: authPasswordFile
+    default: "{{Output}}/auth/password-{{TargetSpace}}.txt"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: enableBrowserLogin
+    type: bool
+    default: false
+  - name: authLoginUrl
+    default: ""
+  - name: authUsername
+    default: ""
+  - name: authPassword
+    default: ""
+  - name: browserUsernameSelector
+    default: "input[name='username'],input[type='email']"
+  - name: browserPasswordSelector
+    default: "input[name='password'],input[type='password']"
+  - name: browserSubmitSelector
+    default: "button[type='submit'],input[type='submit']"
+  - name: browserStorageTokenRegex
+    default: "(token|jwt|access)"
+  - name: browserAuthHeaderName
+    default: "Authorization"
+  - name: browserAuthHeaderPrefix
+    default: "Bearer "
+  - name: browserLoginTimeout
+    default: "30000"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - node
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: browser-auth-session-report
+    path: "{{authSessionReport}}"
+    type: md
+    description: Browser login capture summary without raw secret values
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-folder
+    type: function
+    log: "Creating auth output folder"
+    pre_condition: '"{{enableAuthScan}}" == "true" && "{{enableBrowserLogin}}" == "true"'
+    functions:
+      - 'create_folder("{{authDir}}")'
+
+  - name: browser-login-capture
+    type: bash
+    log: "Capturing browser login session with Playwright"
+    pre_condition: '"{{enableAuthScan}}" == "true" && "{{enableBrowserLogin}}" == "true"'
+    commands:
+      - |
+        cat > "{{authDir}}/browser-login-config-{{TargetSpace}}.json" <<'EOF'
+        {
+          "target": "{{Target}}",
+          "loginUrl": "{{authLoginUrl}}",
+          "usernameSelector": "{{browserUsernameSelector}}",
+          "passwordSelector": "{{browserPasswordSelector}}",
+          "submitSelector": "{{browserSubmitSelector}}",
+          "storageTokenRegex": "{{browserStorageTokenRegex}}",
+          "authHeaderName": "{{browserAuthHeaderName}}",
+          "authHeaderPrefix": "{{browserAuthHeaderPrefix}}",
+          "timeout": "{{browserLoginTimeout}}"
+        }
+        EOF
+        node - "{{authDir}}/browser-login-config-{{TargetSpace}}.json" "{{authUsernameFile}}" "{{authPasswordFile}}" \
+          "{{authSessionFile}}" "{{authHeaderFile}}" "{{authCookieFile}}" "{{authScopeFile}}" \
+          "{{authHeaderArgsFile}}" "{{authSqlmapHeadersFile}}" "{{authSessionValidFile}}" "{{authSessionReport}}" <<'NODE'
+        const fs = require("fs");
+        const path = require("path");
+
+        const [
+          configFile, usernameFile, passwordFile, sessionFile, headerFile, cookieFile,
+          scopeFile, headerArgsFile, sqlmapHeadersFile, validFile, reportFile
+        ] = process.argv.slice(2);
+
+        const readText = (file) => {
+          try {
+            return fs.readFileSync(file, "utf8").trim();
+          } catch (_) {
+            return "";
+          }
+        };
+
+        const appendReport = (line) => {
+          fs.appendFileSync(reportFile, `${line}\n`);
+        };
+
+        const normalizeTimeout = (value) => {
+          const parsed = Number(value || "30000");
+          return Number.isFinite(parsed) && parsed > 0 ? parsed : 30000;
+        };
+
+        const writeHelpers = (headers) => {
+          const lines = Object.entries(headers).map(([key, value]) => `${key}: ${value}`);
+          fs.writeFileSync(headerFile, lines.length ? `${lines.join("\n")}\n` : "");
+          fs.writeFileSync(headerArgsFile, lines.length ? `${lines.join("\n")}\n` : "");
+          fs.writeFileSync(sqlmapHeadersFile, lines.join("\\r\\n"));
+        };
+
+        (async () => {
+          fs.mkdirSync(path.dirname(reportFile), { recursive: true });
+
+          let config = {};
+          try {
+            config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+          } catch (error) {
+            fs.writeFileSync(reportFile, `# Browser Auth Session\n\n- Error: invalid browser login config\n`);
+            return;
+          }
+
+          const target = config.target || "";
+          const loginUrl = (config.loginUrl || "").trim();
+          const timeout = normalizeTimeout(config.timeout);
+          const username = readText(usernameFile);
+          const password = readText(passwordFile);
+
+          fs.writeFileSync(reportFile, [
+            `# Browser Auth Session - ${target}`,
+            "",
+            "- Mode: browser",
+            "- Secret handling: username and password are read from authUsernameFile/authPasswordFile only; direct params are intentionally not consumed.",
+          ].join("\n") + "\n");
+
+          if (!loginUrl) {
+            appendReport("- Browser login skipped: login URL is not configured");
+            fs.rmSync(validFile, { force: true });
+            return;
+          }
+          if (!username || !password) {
+            appendReport("- Browser login skipped: username or password file is not configured");
+            fs.rmSync(validFile, { force: true });
+            return;
+          }
+
+          let chromium;
+          try {
+            ({ chromium } = require("playwright"));
+          } catch (error) {
+            appendReport("- Browser login skipped: playwright package is not available to node");
+            fs.rmSync(validFile, { force: true });
+            return;
+          }
+
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          let finalUrl = "";
+
+          try {
+            await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout });
+            await page.locator(config.usernameSelector).first().fill(username, { timeout }).catch(() => {});
+            await page.locator(config.passwordSelector).first().fill(password, { timeout }).catch(() => {});
+            await page.locator(config.submitSelector).first().click({ timeout }).catch(() => {});
+            await page.waitForLoadState("networkidle", { timeout }).catch(() => {});
+            finalUrl = page.url();
+
+            const cookies = await context.cookies();
+            const storage = await page.evaluate(() => {
+              const out = {};
+              for (const storeName of ["localStorage", "sessionStorage"]) {
+                const store = window[storeName];
+                out[storeName] = {};
+                for (let i = 0; i < store.length; i += 1) {
+                  const key = store.key(i);
+                  out[storeName][key] = store.getItem(key);
+                }
+              }
+              return out;
+            }).catch(() => ({}));
+
+            let token = "";
+            let tokenRegex;
+            try {
+              tokenRegex = new RegExp(config.storageTokenRegex || "(token|jwt|access)", "i");
+            } catch (_) {
+              tokenRegex = /(token|jwt|access)/i;
+            }
+            for (const area of Object.values(storage)) {
+              for (const [key, value] of Object.entries(area || {})) {
+                if (tokenRegex.test(key) && value) token = value;
+              }
+            }
+
+            const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+            const headers = {};
+            if (cookieHeader) headers.Cookie = cookieHeader;
+            if (token) headers[config.authHeaderName || "Authorization"] = `${config.authHeaderPrefix || "Bearer "}${token}`;
+
+            writeHelpers(headers);
+            fs.writeFileSync(cookieFile, cookieHeader ? `${cookieHeader}\n` : "");
+            if (!fs.existsSync(scopeFile) || fs.statSync(scopeFile).size === 0) {
+              fs.writeFileSync(scopeFile, finalUrl || loginUrl ? `${finalUrl || loginUrl}\n` : "");
+            }
+            fs.writeFileSync(sessionFile, JSON.stringify({
+              target,
+              source: "browser-login",
+              created_at: new Date().toISOString(),
+              headers,
+              cookies: cookies.map((cookie) => ({ name: cookie.name, domain: cookie.domain, path: cookie.path })),
+              scope: readText(scopeFile).split(/\r?\n/).filter(Boolean),
+              evidence: { login_url: loginUrl, final_url: finalUrl },
+            }, null, 2));
+
+            if (Object.keys(headers).length > 0 && readText(scopeFile)) {
+              fs.writeFileSync(validFile, "valid\n");
+            } else {
+              fs.rmSync(validFile, { force: true });
+            }
+            appendReport(`- Cookies present: ${cookies.length}`);
+            appendReport(`- Headers present: ${Object.keys(headers).join(", ") || "None"}`);
+            appendReport(`- Final URL: ${finalUrl || "unknown"}`);
+          } finally {
+            await browser.close().catch(() => {});
+          }
+        })().catch((error) => {
+          fs.writeFileSync(reportFile, `# Browser Auth Session\n\n- Error: ${error.message}\n`);
+          fs.rmSync(validFile, { force: true });
+          process.exit(0);
+        });
+        NODE
+    on_error:
+      - action: continue
