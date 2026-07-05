@@ -14,6 +14,7 @@ The design uses a dedicated auth second pass. Public recon remains unchanged and
 - Keep unauthenticated baseline scans.
 - Apply auth only to selected web phases: spidering, content discovery, nuclei, sqlmap, and Dalfox.
 - Do not modify the baseline modules initially; use dedicated `auth-*` modules for isolation.
+- Provide an authenticated-only execution path for cases where public recon was already completed.
 
 ## Session Artifacts
 
@@ -223,6 +224,32 @@ Each auth module should read these generated helper files rather than reconstruc
 
 ## Flow Placement
 
+### `auth-only`
+
+Add a standalone flow for authenticated testing against an existing workspace or explicit target scope:
+
+```text
+auth-session
+  -> auth-spider + auth-content
+  -> auth-vuln + auth-injection
+  -> llm-surface-analysis
+  -> llm-autonomous-controller
+```
+
+This flow does not run public DNS, HTTP fingerprinting, screenshots, archive collection, service scan, public nuclei, or public injection modules. It is intended for cases where public recon has already been completed or the user only wants private authenticated coverage.
+
+Example:
+
+```bash
+osmedeus run -f auth-only -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'authMode=manual' \
+  -p 'authScope=https://app.example.com,https://api.example.com' \
+  -p 'authHeaderFile=/path/to/headers.txt'
+```
+
+If previous public artifacts exist in the same workspace, `auth-only` may read them as passive context for LLM analysis and reporting, but it must not rerun public modules.
+
 ### `domain-llm` and `web-analysis-llm`
 
 Authenticated scanning runs after the public scan path:
@@ -254,6 +281,9 @@ Flow params:
 - name: enableAuthScan
   type: bool
   default: false
+- name: skipPublicRecon
+  type: bool
+  default: false
 - name: authMode
   default: "manual"
 - name: authScopeFile
@@ -263,6 +293,8 @@ Flow params:
 - name: authCookieFile
   default: "{{Output}}/auth/cookies-{{TargetSpace}}.txt"
 ```
+
+`skipPublicRecon=true` is only valid in flows that are explicitly designed to honor it. For the first implementation, `auth-only` is the preferred way to avoid repeated public scans. If `skipPublicRecon` is added to `domain-llm` or `web-analysis-llm`, every public module in that flow must have a guard that skips cleanly while preserving the auth module chain.
 
 Example manual mode:
 
@@ -283,6 +315,18 @@ osmedeus run -f web-analysis-llm -t https://app.example.com \
   -p 'authLoginUrl=https://app.example.com/login' \
   -p 'authUsername=demo' \
   -p 'authPassword=demo'
+```
+
+Example auth-only rerun after public recon already exists:
+
+```bash
+osmedeus run -f auth-only -t example.com \
+  -p 'enableAuthScan=true' \
+  -p 'authMode=api' \
+  -p 'authScope=https://api.example.com' \
+  -p 'authLoginUrl=https://api.example.com/login' \
+  -p 'authApiLoginBody={"username":"demo","password":"demo"}' \
+  -p 'authTokenJsonPath=.token'
 ```
 
 ## Safety and Failure Handling
@@ -380,6 +424,8 @@ Functional test targets:
 Success criteria:
 
 - No auth module runs when `enableAuthScan=false`.
+- `auth-only` does not render or execute public recon modules.
+- `auth-only` can use existing public artifacts as read-only context when they exist.
 - Auth modules skip when scope is empty.
 - Headers/cookies are passed to spider/content/nuclei/sqlmap/Dalfox.
 - Auth artifacts remain separate from baseline artifacts.
