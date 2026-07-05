@@ -210,6 +210,8 @@ osmedeus run -f domain-llm -t example.com \
   -p 'authTokenJsonPath=.token'
 ```
 
+See the workflow guide at [docs/llm-workflow-guide.md](docs/llm-workflow-guide.md) for the recommended LLM module pattern, guardrails, and flow wiring.
+
 Use LLM auth discovery as a reviewed config proposal, then provide credentials through files:
 
 ```bash
