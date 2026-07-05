@@ -1,0 +1,121 @@
+# =============================================================================
+# Module Workflow: Authenticated Web Spidering
+# =============================================================================
+
+kind: module
+name: auth-spider
+description: Crawl authenticated scope with preserved session headers
+tags: auth, spider, crawl
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authDir
+    default: "{{Output}}/auth"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authLinksFile
+    default: "{{Output}}/auth/links-{{TargetSpace}}.txt"
+  - name: authParameterizedUrlsFile
+    default: "{{Output}}/auth/parameterized-urls-{{TargetSpace}}.txt"
+  - name: authSpiderRecordsFile
+    default: "{{Output}}/auth/spider-records-{{TargetSpace}}.jsonl"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: authSpiderTimeout
+    default: "45m"
+  - name: authSpiderThreads
+    default: "{{ threads }}"
+  - name: authSpiderParallel
+    default: "{{ threads / 2 }}"
+  - name: authCrawlingTime
+    default: "20"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - katana
+    - python3
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-links
+    path: "{{authLinksFile}}"
+    type: text
+    description: Authenticated crawled links
+
+  - name: auth-parameterized-urls
+    path: "{{authParameterizedUrlsFile}}"
+    type: text
+    description: Parameterized authenticated URLs found by crawling
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-folder
+    type: function
+    log: "Creating auth output folder"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    functions:
+      - 'create_folder("{{authDir}}")'
+
+  - name: crawl-auth-scope
+    type: foreach
+    log: "Crawling authenticated scope with Katana"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authScopeFile}}") > 0 && file_length("{{authHeaderArgsFile}}") > 0'
+    input: "{{authScopeFile}}"
+    variable: line
+    threads: "{{authSpiderParallel}}"
+    step:
+      name: katana-auth-target
+      type: bash
+      command: |
+        header_args=()
+        while IFS= read -r header || [ -n "$header" ]; do
+          [ -n "$header" ] && header_args+=("-H" "$header")
+        done < "{{authHeaderArgsFile}}"
+        timeout -k 1m {{authSpiderTimeout}} katana -silent -c {{authSpiderThreads}} -jc -ct {{authCrawlingTime}} "${header_args[@]}" -u '[[line]]' | sort -u >> "{{authLinksFile}}"
+      on_error:
+        - action: continue
+
+  - name: normalize-auth-links
+    type: bash
+    log: "Normalizing authenticated links"
+    pre_condition: 'file_exists("{{authLinksFile}}")'
+    commands:
+      - |
+        sort -u "{{authLinksFile}}" -o "{{authLinksFile}}" 2>/dev/null || true
+        grep '?' "{{authLinksFile}}" | sort -u > "{{authParameterizedUrlsFile}}" || true
+        python3 - "{{authLinksFile}}" "{{authSpiderRecordsFile}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        links = Path(sys.argv[1])
+        out = Path(sys.argv[2])
+        rows = []
+        if links.exists():
+            for url in links.read_text(encoding="utf-8", errors="replace").splitlines():
+                url = url.strip()
+                if url:
+                    rows.append({"url": url, "source": "auth-spider"})
+        out.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        PY
+    on_error:
+      - action: continue

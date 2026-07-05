@@ -1,0 +1,121 @@
+# =============================================================================
+# Module Workflow: Authenticated Content Discovery
+# =============================================================================
+
+kind: module
+name: auth-content
+description: Run authenticated content discovery against explicit auth scope
+tags: auth, content-discovery, ffuf
+
+# -----------------------------------------------------------------------------
+# PARAMS SECTION
+# -----------------------------------------------------------------------------
+params:
+  - name: authDir
+    default: "{{Output}}/auth"
+  - name: authScopeFile
+    default: "{{Output}}/auth/scope-{{TargetSpace}}.txt"
+  - name: authHeaderArgsFile
+    default: "{{Output}}/auth/header-args-{{TargetSpace}}.txt"
+  - name: authSessionValidFile
+    default: "{{Output}}/auth/session-valid-{{TargetSpace}}.txt"
+  - name: authContentUrlsFile
+    default: "{{Output}}/auth/content-discovery-url-{{TargetSpace}}.txt"
+  - name: authContentRecordsFile
+    default: "{{Output}}/auth/content-records-{{TargetSpace}}.jsonl"
+  - name: authContentReport
+    default: "{{Output}}/auth/content-discovery-report-{{TargetSpace}}.md"
+  - name: authContentWordlist
+    default: "{{Data}}/wordlists/content/small.txt"
+
+  - name: enableAuthScan
+    type: bool
+    default: false
+  - name: authFfufTimeout
+    default: "30m"
+  - name: authFfufParallel
+    default: "10"
+  - name: authFfufThreads
+    default: "25"
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES SECTION
+# -----------------------------------------------------------------------------
+dependencies:
+  commands:
+    - ffuf
+    - jq
+    - python3
+  variables:
+    - name: Target
+      type: string
+      required: true
+
+# -----------------------------------------------------------------------------
+# REPORTS SECTION
+# -----------------------------------------------------------------------------
+reports:
+  - name: auth-content-report
+    path: "{{authContentReport}}"
+    type: md
+    description: Authenticated content discovery report
+
+  - name: auth-content-urls
+    path: "{{authContentUrlsFile}}"
+    type: text
+    description: Authenticated content discovery URLs
+
+# -----------------------------------------------------------------------------
+# STEPS SECTION
+# -----------------------------------------------------------------------------
+steps:
+  - name: create-auth-folder
+    type: function
+    log: "Creating auth output folder"
+    pre_condition: '"{{enableAuthScan}}" == "true"'
+    functions:
+      - 'create_folder("{{authDir}}")'
+
+  - name: ffuf-auth-scope
+    type: foreach
+    log: "Running ffuf with authenticated headers"
+    pre_condition: '"{{enableAuthScan}}" == "true" && file_length("{{authSessionValidFile}}") > 0 && file_length("{{authScopeFile}}") > 0 && file_length("{{authHeaderArgsFile}}") > 0'
+    input: "{{authScopeFile}}"
+    variable: line
+    threads: "{{authFfufParallel}}"
+    step:
+      name: ffuf-auth-target
+      type: bash
+      command: |
+        header_args=()
+        while IFS= read -r header || [ -n "$header" ]; do
+          [ -n "$header" ] && header_args+=("-H" "$header")
+        done < "{{authHeaderArgsFile}}"
+        timeout -k 1m {{authFfufTimeout}} ffuf -s -t {{authFfufThreads}} -noninteractive -ac -acs advanced -timeout 15 -se -D -fc "429,404,400" -json "${header_args[@]}" -u '[[line]]/FUZZ' -w "{{authContentWordlist}}":FUZZ > "{{authDir}}/ffuf-auth-raw-[[_id_]].json" 2>/dev/null
+      on_error:
+        - action: continue
+
+  - name: process-auth-ffuf
+    type: bash
+    log: "Processing authenticated ffuf results"
+    pre_condition: 'dir_length("{{authDir}}") > 0'
+    commands:
+      - |
+        cat "{{authDir}}"/ffuf-auth-raw-*.json 2>/dev/null | jq -r '.results[]?.url // empty' | sort -u > "{{authContentUrlsFile}}" || true
+        python3 - "{{authContentUrlsFile}}" "{{authContentRecordsFile}}" "{{authContentReport}}" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        urls = Path(sys.argv[1])
+        records = Path(sys.argv[2])
+        report = Path(sys.argv[3])
+        values = []
+        if urls.exists():
+            values = [line.strip() for line in urls.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        records.write_text("".join(json.dumps({"url": url, "source": "auth-content"}) + "\n" for url in values), encoding="utf-8")
+        report.write_text("# Auth Content Discovery\n\n" + "\n".join(f"- {url}" for url in values[:200]) + ("\n" if values else ""), encoding="utf-8")
+        PY
+        rm -f "{{authDir}}"/ffuf-auth-raw-*.json
+    on_error:
+      - action: continue
